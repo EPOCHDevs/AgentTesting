@@ -1,0 +1,7 @@
+# Dedicated shared development stack. No production or local fallback.
+[dev]
+backend_url = "https://api.dev.epoch.trade"
+ai_url = "https://dev-server-75332ad41d165993bce742c3da685d9a.aws.us.langgraph.app"
+ui_url = "https://app.dev.epoch.trade"
+assistant_id = "epoch-ai"
+token_env = "EPOCH_TOKEN"
