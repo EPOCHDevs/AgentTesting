@@ -7,7 +7,7 @@ conversations and reviewing the evidence behind their results.
 
 | Folder | Purpose |
 |---|---|
-| `scenarios/` | Personas, research questions and acceptance checks |
+| `scenarios/` | Realistic role briefs, opening questions and known exclusions |
 | `campaigns/` | Assignments, coverage and attempt records |
 | `tools/` | Conversation and evidence helpers |
 | `notebooks/` | Review views and examples |
@@ -16,7 +16,8 @@ conversations and reviewing the evidence behind their results.
 
 Choose a scenario → have a conversation → collect evidence → review → record findings.
 
-The researcher reacts to actual answers. A separate reviewer checks the result.
+Start with the [research situations](scenarios/README.md). The researcher reacts
+to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
 Each attempt owns its records; a shared index can summarize them without competing
 writes. A completed conversation is not automatically a passing result.
 
@@ -36,10 +37,10 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 # Supply EPOCH_TOKEN through your existing Epoch login; do not commit it.
 .venv/bin/python -m tools.agent_testing check
-.venv/bin/python -m tools.agent_testing ask msft-01 --key opening --owner researcher-a \
-  --scenario financial-quality "Has Microsoft's growth become more cash-generative over FY2023–FY2025?"
-.venv/bin/python -m tools.agent_testing pull msft-01 --follow
-.venv/bin/python -m tools.agent_testing status msft-01
+.venv/bin/python -m tools.agent_testing ask industrial-01 --key opening --owner researcher-a \
+  --scenario industrial-resilience "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which business looks better able to withstand a slowdown in customer orders, and what makes you think so?"
+.venv/bin/python -m tools.agent_testing pull industrial-01 --follow
+.venv/bin/python -m tools.agent_testing status industrial-01
 ```
 
 Read the returned answer before choosing a follow-up. Another `ask` with a new
@@ -50,7 +51,7 @@ under a new key. Failed attempts remain available for review.
 
 For a clarification, `status` shows the current interrupt IDs and payloads. Write
 a local JSON file mapping the selected IDs to their explicit response payloads,
-then use `answer msft-01 --key clarification-1 --responses /path/to/answers.json`.
+then use `answer industrial-01 --key clarification-1 --responses /path/to/answers.json`.
 No option is selected automatically.
 
 `pull` saves the server conversation; `pull --follow` also captures a resumable
