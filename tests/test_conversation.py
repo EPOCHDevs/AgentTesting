@@ -55,7 +55,9 @@ class Server:
         if path.endswith("/state"):
             return httpx.Response(200, json=self.state)
         if path.endswith("/runs"):
-            return httpx.Response(200, json=self.runs)
+            offset = int(request.url.params.get("offset", 0))
+            limit = int(request.url.params.get("limit", 10))
+            return httpx.Response(200, json=self.runs[offset : offset + limit])
         if "/runs/" in path:
             return httpx.Response(
                 200,
@@ -304,6 +306,231 @@ def test_single_writer_lock(tmp_path):
         with pytest.raises(BlockingIOError):
             with app.writer(tmp_path):
                 pytest.fail("second writer acquired the same attempt")
+
+
+def test_attach_existing_ui_thread_is_read_only(tmp_path):
+    server = Server()
+    tid = str(uuid4())
+    result = exercise(
+        tmp_path,
+        server,
+        lambda c: c.attach(tid, owner="researcher", scenario="airline-fuel"),
+    )
+    assert result["thread_id"] == tid
+    assert server.posts == []
+    assert json.loads((tmp_path / "attempt.json").read_text())["attached"] is True
+    with pytest.raises(ValueError, match="another thread"):
+        exercise(
+            tmp_path,
+            server,
+            lambda c: c.attach(str(uuid4()), owner="researcher", scenario=None),
+        )
+
+
+def test_pull_collects_every_run_for_attached_thread(tmp_path):
+    server = Server()
+    tid = str(uuid4())
+    exercise(
+        tmp_path, server, lambda c: c.attach(tid, owner="researcher", scenario=None)
+    )
+    server.runs = [
+        {
+            "run_id": str(uuid4()),
+            "thread_id": tid,
+            "status": "success",
+            "created_at": STAMP,
+            "updated_at": "2026-10-25T12:00:04+00:00",
+            "metadata": {},
+        }
+        for _ in range(205)
+    ]
+    result = exercise(tmp_path, server, lambda c: c.pull())
+    assert len(result["metrics"]["runs"]) == 205
+    assert result["capture_status"] == "complete"
+    assert (tmp_path / "report.md").exists()
+
+
+def test_attached_unknown_submission_cannot_adopt_an_old_readable_key(
+    tmp_path, fake_health
+):
+    server = Server()
+    tid = str(uuid4())
+    exercise(
+        tmp_path, server, lambda c: c.attach(tid, owner="researcher", scenario=None)
+    )
+    server.runs = [
+        {
+            "run_id": str(uuid4()),
+            "thread_id": tid,
+            "status": "success",
+            "metadata": {
+                "agent_testing_key": "first",
+                "agent_testing_submission_id": "old-submission",
+            },
+            "created_at": STAMP,
+            "updated_at": STAMP,
+        }
+    ]
+    normal = server.handle
+
+    def uncertain(request):
+        if request.method == "POST" and request.url.path.endswith("/runs"):
+            raise httpx.ReadError("unknown submission outcome")
+        return normal(request)
+
+    server.handle = uncertain
+    with pytest.raises(httpx.ReadError):
+        exercise(tmp_path, server, ask)
+    server.handle = normal
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        exercise(tmp_path, server, ask)
+    assert not (tmp_path / "turns/first/run.json").exists()
+    assert len(server.runs) == 1
+
+
+def test_history_page_failure_preserves_current_partial_and_old_capture(tmp_path):
+    server = Server()
+    tid = str(uuid4())
+    exercise(
+        tmp_path, server, lambda c: c.attach(tid, owner="researcher", scenario=None)
+    )
+    server.runs = [
+        {
+            "run_id": str(uuid4()),
+            "thread_id": tid,
+            "status": "success",
+            "metadata": {},
+            "created_at": STAMP,
+            "updated_at": STAMP,
+        }
+        for _ in range(101)
+    ]
+    original = {"captured_at": STAMP, "complete": True, "runs": []}
+    app.save(tmp_path / "runs.json", original)
+    normal = server.handle
+
+    def failure(request):
+        if (
+            request.url.path.endswith("/runs")
+            and request.url.params.get("offset") == "100"
+        ):
+            return httpx.Response(503, json={"detail": "later page unavailable"})
+        return normal(request)
+
+    server.handle = failure
+    result = exercise(tmp_path, server, lambda c: c.pull())
+    receipt = json.loads((tmp_path / "runs.json").read_text())
+    assert len(receipt["runs"]) == 100
+    assert receipt["complete"] is False
+    assert receipt["error_type"] == "InternalServerError"
+    assert result["capture_status"] == "partial"
+    assert result["metrics"]["run_coverage"]["complete"] is False
+    assert original in [
+        json.loads(p.read_text()) for p in (tmp_path / "run-captures").glob("*.json")
+    ]
+
+
+def test_requested_missing_trace_config_is_explicit_partial(
+    tmp_path, fake_health, monkeypatch
+):
+    for name in ("LANGSMITH_API_KEY", "LANGSMITH_PROJECT", "LANGSMITH_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
+    server = Server()
+    exercise(tmp_path, server, ask)
+    result = exercise(tmp_path, server, lambda c: c.pull(traces=True))
+    assert result["sources"]["thread"]["status"] == "available"
+    assert result["sources"]["langsmith"]["status"] == "unavailable"
+    assert "LANGSMITH_API_KEY" in result["sources"]["langsmith"]["reason"]
+    assert result["capture_status"] == "partial"
+
+
+def test_backend_collection_uses_only_accepted_state_ids(
+    tmp_path, fake_health, monkeypatch
+):
+    from tools import executions
+
+    server = Server()
+    exercise(tmp_path, server, ask)
+    server.state["values"].update(
+        execution_ids=["accepted-job"],
+        messages=[{"type": "ai", "content": "unrelated uuid: do-not-use"}],
+    )
+    captured = []
+
+    async def collect(folder, url, bearer, ids):
+        captured.extend(ids)
+        return {"executions": [{"execution_id": i, "status": "complete"} for i in ids]}
+
+    monkeypatch.setattr(executions, "collect", collect)
+    result = exercise(
+        tmp_path, server, lambda c: c.pull(executions=True, bearer="Bearer test-only")
+    )
+    assert captured == ["accepted-job"]
+    assert result["sources"]["backend"]["status"] == "available"
+
+
+def test_other_sources_are_attempted_when_graph_fetch_fails(
+    tmp_path, fake_health, monkeypatch
+):
+    from tools import executions, traces
+
+    server = Server()
+    exercise(tmp_path, server, ask)
+    handle = server.handle
+
+    def failed(request):
+        if request.method == "GET":
+            return httpx.Response(503, json={"detail": "unavailable"})
+        return handle(request)
+
+    server.handle = failed
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://trace.example")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "dev")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-only")
+    calls = []
+
+    def trace_collect(*args, **kwargs):
+        calls.append("traces")
+        return {"runs": [], "coverage": {"complete": False}}
+
+    async def backend_collect(*args, **kwargs):
+        calls.append("backend")
+        return {"executions": [{"execution_id": "known-id", "status": "partial"}]}
+
+    monkeypatch.setattr(traces, "collect", trace_collect)
+    monkeypatch.setattr(executions, "collect", backend_collect)
+    result = exercise(
+        tmp_path,
+        server,
+        lambda c: c.pull(
+            traces=True, execution_ids=["known-id"], bearer="Bearer test-only"
+        ),
+    )
+    assert calls == ["traces", "backend"]
+    assert result["sources"]["thread"]["status"] == "unavailable"
+    assert result["capture_status"] == "partial"
+
+
+def test_review_preserves_history_and_never_changes_run_state(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path / "case", server, ask)
+    app.record_review(
+        tmp_path / "case",
+        reviewer="reviewer-a",
+        outcome="partial",
+        finding="Missing comparison",
+        evidence=["conversation.md"],
+    )
+    app.record_review(
+        tmp_path / "case",
+        reviewer="reviewer-b",
+        outcome="fail",
+        finding="Wrong calculation",
+        evidence=["thread.json"],
+    )
+    assert len(list((tmp_path / "case/reviews").glob("*.json"))) == 2
+    assert json.loads((tmp_path / "case/review.json").read_text())["outcome"] == "fail"
+    assert len(server.runs) == 1
 
 
 def test_usage_deduplicates_cumulative_messages_and_excludes_other_channels(tmp_path):

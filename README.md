@@ -60,13 +60,48 @@ from a later checkpoint. Stopping this local observer does not cancel the run.
 Evidence lives in ignored `.artifacts/<attempt>/`. `metrics.json` distinguishes
 observed token counts and server elapsed time from unknown model time/cost.
 
-`index` prints the global table without network access. Assign one owner per
-attempt and use different attempt names for parallel research. A reviewer may
-add `review.json` inside an attempt with `outcome`, `finding` and `evidence` fields;
-the runner never grades its own result. Keep numerical answer keys separate from
-the researcher brief. See [migration scope](MIGRATION.md) for retained legacy code.
+## Inspect deployed evidence
 
-Only `ask` and `answer` initiate agent runs. Current implementation validation is
-offline plus hosted health checks; no live research acceptance is claimed.
+A conversation started in the UI can be attached without sending a message:
+
+```bash
+.venv/bin/python -m tools.agent_testing attach review-01 THREAD_ID --owner reviewer-a
+.venv/bin/python -m tools.agent_testing pull review-01 --traces --executions
+.venv/bin/python -m tools.agent_testing report review-01
+```
+
+For `--traces`, configure `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` and
+`LANGSMITH_API_KEY` in the environment; `LANGSMITH_WORKSPACE_ID` is optional.
+Choose the deployed agent's tracing project explicitly. Never commit the key.
+
+The pull collects the thread and full run list, LangSmith trace trees, and Backend
+records for the thread's accepted execution IDs. An explicit `--execution-id ID`
+can add a known execution receipt. Each requested source is attempted separately.
+Missing, expired or incomplete evidence is reported; a partial pull exits with
+code 2 after saving what it obtained.
+
+`report.md` shows agent usage, observed errors, span timing and reported cost, plus
+Backend status, logs, configuration/HTTP/record events and native job timing where
+those were retained. Raw records stay beside the report for debugging. Historical
+streams are not a guarantee of every live event. LangSmith cost is a reported
+estimate, not an invoice or Backend infrastructure bill; unknown cost stays unknown.
+
+`report` and `index` work offline. Assign one owner per attempt and use distinct
+attempt names for parallel research. Record a separate review explicitly:
+
+```bash
+.venv/bin/python -m tools.agent_testing review review-01 --reviewer reviewer-b \
+  --outcome partial --finding "The comparison is incomplete." --evidence conversation.md
+.venv/bin/python -m tools.agent_testing index > .artifacts/index.md
+```
+
+Reviews retain their history and never change the execution's status. Keep
+numerical answer keys separate from the researcher brief. See the
+[migration map](MIGRATION.md) for retained legacy code.
+
+Only `ask` and `answer` initiate agent runs. Validation includes offline protocol
+tests and read-only retrieval of existing hosted Backend executions. No new live
+research acceptance is claimed; complete agent-trace validation needs an
+accessible shared-dev thread.
 Keep credentials and raw session artifacts outside version control. Publish
 reviewed examples only.
