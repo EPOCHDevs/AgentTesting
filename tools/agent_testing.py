@@ -20,8 +20,8 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict, cast
-from urllib.parse import urlsplit
+from typing import NotRequired, TypedDict, cast
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -47,6 +47,7 @@ class Attempt(TypedDict):
     scenario: str | None
     created_at: str
     services: ServiceIdentity
+    attached: NotRequired[bool]
 
 
 class Status(TypedDict):
@@ -54,6 +55,13 @@ class Status(TypedDict):
     thread_id: str
     thread_status: str
     pending: dict[str, object]
+    runs: list[Run]
+
+
+class RunHistory(TypedDict):
+    captured_at: str
+    complete: bool
+    error_type: str | None
     runs: list[Run]
 
 
@@ -190,6 +198,78 @@ class Conversation:
             )
         return record
 
+    async def attach(
+        self, thread_id: str, *, owner: str, scenario: str | None
+    ) -> Status:
+        """Adopt an existing authorized UI/API thread without sending a message."""
+        with writer(self.folder):
+            thread = await self.client.threads.get(thread_id)
+            if thread["thread_id"] != thread_id:
+                raise RuntimeError("The server returned a different thread identity.")
+            if (self.folder / "attempt.json").exists():
+                if self.attempt()["thread_id"] != thread_id:
+                    raise ValueError("This attempt already belongs to another thread.")
+            else:
+                save(
+                    self.folder / "attempt.json",
+                    {
+                        "thread_id": thread_id,
+                        "owner": owner,
+                        "scenario": scenario,
+                        "created_at": now(),
+                        "services": asdict(self.config),
+                        "attached": True,
+                    },
+                )
+                save(
+                    self.folder / "attachment.json",
+                    {
+                        "configured_stack": asdict(self.config),
+                        "attached_at": now(),
+                        "thread_created_at": thread.get("created_at"),
+                        "scope": "Configured endpoints at attachment, not a health check or proof of the historical deployment.",
+                    },
+                )
+            return await self.status()
+
+    async def all_runs(self) -> RunHistory:
+        thread_id = self.attempt()["thread_id"]
+        found: dict[str, Run] = {}
+        offset = 0
+        receipt: RunHistory = {
+            "captured_at": now(),
+            "complete": False,
+            "error_type": None,
+            "runs": [],
+        }
+        try:
+            while True:
+                page = await self.client.runs.list(thread_id, limit=100, offset=offset)
+                new = [run for run in page if run["run_id"] not in found]
+                if page and not new:
+                    raise RuntimeError("Run pagination did not advance.")
+                found.update((run["run_id"], run) for run in new)
+                if len(page) < 100:
+                    receipt["complete"] = True
+                    break
+                offset += len(page)
+        except asyncio.CancelledError:
+            receipt["error_type"] = "CancelledError"
+            raise
+        except Exception as error:
+            receipt["error_type"] = type(error).__name__
+        finally:
+            receipt["runs"] = list(found.values())
+            previous = self.folder / "runs.json"
+            if previous.exists():
+                save(
+                    self.folder / "run-captures" / f"{uuid4()}.json",
+                    json.loads(previous.read_text()),
+                )
+            save(self.folder / "run-captures" / f"{uuid4()}.json", receipt)
+            save(previous, receipt)
+        return receipt
+
     async def status(self) -> Status:
         attempt = self.attempt()
         thread, state, runs = await asyncio.gather(
@@ -231,7 +311,10 @@ class Conversation:
             request_file, run_file = target / "request.json", target / "run.json"
             if request_file.exists():
                 self.attempt()  # Cached receipts still belong to one exact stack.
-                if json.loads(request_file.read_text()) != request:
+                saved_request = json.loads(request_file.read_text())
+                if {
+                    key: saved_request[key] for key in ("message", "responses")
+                } != request:
                     raise ValueError(
                         "This turn key already names a different request. Choose a new key."
                     )
@@ -240,6 +323,11 @@ class Conversation:
                 if (target / "rejected.json").exists():
                     raise RuntimeError(
                         "The server rejected this submission. Inspect rejected.json and use a new key after correcting the cause."
+                    )
+                submission_id = saved_request.get("submission_id")
+                if not submission_id:
+                    raise RuntimeError(
+                        "Legacy unconfirmed submission has no unique receipt; manual verification is required."
                     )
                 # A lost HTTP response does not authorize another paid run.
                 thread_id = self.attempt()["thread_id"]
@@ -252,6 +340,8 @@ class Conversation:
                         r
                         for r in runs
                         if (r.get("metadata") or {}).get("agent_testing_key") == key
+                        and (r.get("metadata") or {}).get("agent_testing_submission_id")
+                        == submission_id
                     ]
                     if matches:
                         if len(matches) != 1:
@@ -316,7 +406,8 @@ class Conversation:
                     "Answer the pending questions before sending another user turn."
                 )
             save(target / "stack.json", receipt)
-            save(request_file, request)
+            submission_id = str(uuid4())
+            save(request_file, {**request, "submission_id": submission_id})
             command: Command | None = (
                 {"resume": responses} if responses is not None else None
             )
@@ -328,7 +419,10 @@ class Conversation:
                     if message is not None
                     else None,
                     command=command,
-                    metadata={"agent_testing_key": key},
+                    metadata={
+                        "agent_testing_key": key,
+                        "agent_testing_submission_id": submission_id,
+                    },
                     multitask_strategy="reject",
                     stream_mode=["values", "messages-tuple", "custom", "updates"],
                     stream_subgraphs=True,
@@ -361,63 +455,200 @@ class Conversation:
             save(run_file, result)
             return result
 
-    async def pull(self, *, follow: bool = False) -> dict[str, object]:
-        """Capture persisted state and optionally the latest resumable run stream."""
+    async def pull(
+        self,
+        *,
+        follow: bool = False,
+        traces: bool = False,
+        executions: bool = False,
+        execution_ids: list[str] | None = None,
+        bearer: str | None = None,
+    ) -> dict[str, object]:
+        """Collect independent deployed evidence sources; report every missing part."""
         with writer(self.folder):
             attempt = self.attempt()
-            status = await self.status()
+            sources: dict[str, object] = {
+                "thread": {"status": "unavailable"},
+                "stream": {"status": "not_requested"},
+                "langsmith": {"status": "not_requested"},
+                "backend": {"status": "not_requested"},
+            }
+            status, state, runs = None, None, []
             if follow:
-                runs = cast(list[Run], status["runs"])
-                if not runs:
-                    raise RuntimeError("No run is available to follow.")
-                run = runs[0]
-                target = self.folder / "streams" / run["run_id"]
-                target.mkdir(parents=True, exist_ok=True)
-                cursor = target / "cursor.json"
-                last_id = json.loads(cursor.read_text()) if cursor.exists() else None
-                async for event in self.client.runs.join_stream(
-                    attempt["thread_id"],
-                    run["run_id"],
-                    cancel_on_disconnect=False,
-                    last_event_id=last_id,
-                ):
-                    with (target / "events.jsonl").open("a") as stream:
-                        stream.write(
-                            json.dumps(
-                                {
-                                    "observed_at": now(),
-                                    "id": event.id,
-                                    "event": event.event,
-                                    "data": event.data,
-                                },
-                                default=str,
+                try:
+                    status = await self.status()
+                    recent = status["runs"]
+                    if not recent:
+                        raise ValueError("No run is available to follow.")
+                    run = recent[0]
+                    target = self.folder / "streams" / run["run_id"]
+                    target.mkdir(parents=True, exist_ok=True)
+                    cursor = target / "cursor.json"
+                    last_id = (
+                        json.loads(cursor.read_text()) if cursor.exists() else None
+                    )
+                    async for event in self.client.runs.join_stream(
+                        attempt["thread_id"],
+                        run["run_id"],
+                        cancel_on_disconnect=False,
+                        last_event_id=last_id,
+                    ):
+                        with (target / "events.jsonl").open("a") as stream:
+                            stream.write(
+                                json.dumps(
+                                    {
+                                        "observed_at": now(),
+                                        "id": event.id,
+                                        "event": event.event,
+                                        "data": event.data,
+                                    },
+                                    default=str,
+                                )
+                                + "\n"
                             )
-                            + "\n"
-                        )
-                    if event.id:
-                        save(cursor, event.id)
-                    print(event.event, flush=True)
+                        if event.id:
+                            save(cursor, event.id)
+                        print(event.event, flush=True)
+                    sources["stream"] = {"status": "available", "run_id": run["run_id"]}
+                except Exception as error:
+                    sources["stream"] = {
+                        "status": "unavailable",
+                        "error_type": type(error).__name__,
+                    }
+            try:
                 status = await self.status()
-            state = await self.client.threads.get_state(
-                attempt["thread_id"], subgraphs=True
-            )
-            save(self.folder / "thread.json", state)
-            for path in self.folder.glob("turns/*/run.json"):
-                accepted = json.loads(path.read_text())
-                refreshed = await self.client.runs.get(
-                    attempt["thread_id"], accepted["run_id"]
+                state = await self.client.threads.get_state(
+                    attempt["thread_id"], subgraphs=True
                 )
-                save(path, refreshed)
-            (self.folder / "conversation.md").write_text(render_transcript(state))
+                save(self.folder / "thread.json", state)
+                (self.folder / "conversation.md").write_text(render_transcript(state))
+                history = await self.all_runs()
+                runs = history["runs"]
+                for path in self.folder.glob("turns/*/run.json"):
+                    accepted = json.loads(path.read_text())
+                    refreshed = await self.client.runs.get(
+                        attempt["thread_id"], accepted["run_id"]
+                    )
+                    save(path, refreshed)
+                sources["thread"] = {
+                    "status": "available" if history["complete"] else "partial",
+                    "run_count": len(runs),
+                    "run_history_complete": history["complete"],
+                    "error_type": history["error_type"],
+                }
+            except Exception as error:
+                sources["thread"] = {
+                    "status": "unavailable",
+                    "error_type": type(error).__name__,
+                }
+
+            if traces:
+                from tools.traces import TraceConfig
+                from tools.traces import collect as collect_traces
+
+                try:
+                    trace_config = TraceConfig.from_env()
+                except ValueError as error:
+                    sources["langsmith"] = {
+                        "status": "unavailable",
+                        "reason": str(error),
+                    }
+                else:
+                    try:
+                        snapshot = await asyncio.to_thread(
+                            collect_traces,
+                            self.folder,
+                            attempt["thread_id"],
+                            config=trace_config,
+                            expected_run_ids=[run["run_id"] for run in runs],
+                        )
+                        sources["langsmith"] = {
+                            "status": "available"
+                            if snapshot["coverage"]["complete"]
+                            else "partial",
+                            "run_count": len(snapshot["runs"]),
+                            "coverage": snapshot["coverage"],
+                            "path": "traces/langsmith.json",
+                        }
+                    except Exception as error:
+                        sources["langsmith"] = {
+                            "status": "unavailable",
+                            "error_type": type(error).__name__,
+                        }
+            if executions or execution_ids:
+                from tools.executions import collect as collect_executions
+
+                values = state.get("values") if state else None
+                supplied = (
+                    values.get("execution_ids") if isinstance(values, dict) else None
+                )
+                ids = list(execution_ids or [])
+                ids_available = isinstance(supplied, list) and all(
+                    isinstance(value, str) for value in supplied
+                )
+                if ids_available:
+                    ids.extend(cast(list[str], supplied))
+                ids = list(dict.fromkeys(ids))
+                if ids:
+                    try:
+                        if not bearer:
+                            raise ValueError(
+                                "Backend evidence requires the current Epoch identity."
+                            )
+                        manifest = await collect_executions(
+                            self.folder, self.config.backend_url, bearer, ids
+                        )
+                        complete = all(
+                            row["status"] == "complete"
+                            for row in manifest["executions"]
+                        )
+                        sources["backend"] = {
+                            **manifest,
+                            "status": "available" if complete else "partial",
+                            "identity_source": "state.values.execution_ids and explicit receipt IDs",
+                        }
+                    except Exception as error:
+                        sources["backend"] = {
+                            "status": "unavailable",
+                            "error_type": type(error).__name__,
+                        }
+                elif ids_available:
+                    sources["backend"] = {
+                        "status": "not_applicable",
+                        "reason": "The server has no accepted executions on this thread.",
+                    }
+                else:
+                    sources["backend"] = {
+                        "status": "unavailable",
+                        "reason": "No current accepted execution_ids list; provide exact IDs from execution receipts.",
+                    }
+            complete = all(
+                isinstance(source, dict)
+                and source["status"] not in ("unavailable", "partial")
+                for source in sources.values()
+            )
+            save(
+                self.folder / "sources.json",
+                {"collected_at": now(), "sources": sources},
+            )
             summary = summarize(self.folder)
             save(self.folder / "metrics.json", summary)
-            return {"status": status, "metrics": summary, "evidence": str(self.folder)}
+            from tools.evidence import render_report
+
+            (self.folder / "report.md").write_text(render_report(self.folder))
+            return {
+                "status": status,
+                "capture_status": "complete" if complete else "partial",
+                "metrics": summary,
+                "sources": sources,
+                "evidence": str(self.folder),
+            }
 
 
 def index(root: Path) -> str:
     lines = [
-        "| Attempt | Owner | Scenario | Last observed state | Observed at | Review |",
-        "|---|---|---|---|---|---|",
+        "| Attempt | Owner | Scenario | Last observed state | Observed at | Review | Evidence |",
+        "|---|---|---|---|---|---|---|",
     ]
     for path in sorted(root.glob("*/attempt.json")):
         attempt = json.loads(path.read_text())
@@ -448,14 +679,60 @@ def index(root: Path) -> str:
         lines.append(
             "| "
             + " | ".join(str(x).replace("|", "\\|").replace("\n", " ") for x in values)
+            + " | "
+            + (
+                f"[report]({quote(path.parent.name)}/report.md)"
+                if path.with_name("report.md").exists()
+                else "—"
+            )
             + " |"
         )
     return "\n".join(lines)
 
 
+def record_review(
+    folder: Path, *, reviewer: str, outcome: str, finding: str, evidence: list[str]
+) -> dict[str, object]:
+    """Record an explicit review, independently of execution completion."""
+    if (
+        outcome not in ("pass", "partial", "fail", "unsupported")
+        or not reviewer.strip()
+        or not finding.strip()
+    ):
+        raise ValueError("Provide a reviewer, outcome and finding.")
+    if not (folder / "attempt.json").exists():
+        raise ValueError("Review an existing attempt.")
+    with writer(folder):
+        review = {
+            "reviewer": reviewer,
+            "outcome": outcome,
+            "finding": finding,
+            "evidence": evidence,
+            "reviewed_at": now(),
+        }
+        save(folder / "reviews" / f"{uuid4()}.json", review)
+        save(folder / "review.json", review)
+        return review
+
+
 async def run(args: argparse.Namespace) -> object:
     if args.action == "index":
         return index(args.artifacts)
+    if args.action == "report":
+        from tools.evidence import render_report
+
+        folder = args.artifacts / args.attempt
+        report = render_report(folder)
+        (folder / "report.md").write_text(report)
+        return report
+    if args.action == "review":
+        return record_review(
+            args.artifacts / args.attempt,
+            reviewer=args.reviewer,
+            outcome=args.outcome,
+            finding=args.finding,
+            evidence=args.evidence or [],
+        )
     config = DevStack.load(args.config)
     bearer = config.bearer()
     if args.action == "check":
@@ -488,7 +765,17 @@ async def run(args: argparse.Namespace) -> object:
             )
         if args.action == "status":
             return await conversation.status()
-        return await conversation.pull(follow=args.follow)
+        if args.action == "attach":
+            return await conversation.attach(
+                args.thread_id, owner=args.owner, scenario=args.scenario
+            )
+        return await conversation.pull(
+            follow=args.follow,
+            traces=args.traces,
+            executions=args.executions,
+            execution_ids=args.execution_id,
+            bearer=bearer,
+        )
 
 
 def main() -> None:
@@ -498,7 +785,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("check")
     sub.add_parser("index")
-    for name in ("ask", "answer", "status", "pull"):
+    for name in ("ask", "answer", "status", "pull", "attach", "report", "review"):
         command = sub.add_parser(name)
         command.add_argument("attempt", help="A unique research attempt directory name")
         if name in ("ask", "answer"):
@@ -515,15 +802,70 @@ def main() -> None:
             command.add_argument("--responses", type=Path, required=True)
         if name == "pull":
             command.add_argument("--follow", action="store_true")
+            command.add_argument(
+                "--traces",
+                action="store_true",
+                help="Collect the LangSmith trace tree, timing, cost and errors",
+            )
+            command.add_argument(
+                "--executions",
+                action="store_true",
+                help="Collect Backend evidence for accepted execution IDs in thread state",
+            )
+            command.add_argument(
+                "--execution-id",
+                action="append",
+                help="Additional exact Backend execution ID, repeatable",
+            )
+        if name == "attach":
+            command.add_argument("thread_id")
+            command.add_argument("--owner", default="unassigned")
+            command.add_argument("--scenario")
+        if name == "review":
+            command.add_argument("--reviewer", required=True)
+            command.add_argument(
+                "--outcome",
+                choices=("pass", "partial", "fail", "unsupported"),
+                required=True,
+            )
+            command.add_argument("--finding", required=True)
+            command.add_argument(
+                "--evidence",
+                action="append",
+                help="Reviewed artifact path or issue link; repeatable",
+            )
     args = parser.parse_args()
     if hasattr(args, "attempt") and not re.fullmatch(
         r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}", args.attempt
     ):
         parser.error("Use a simple attempt name, not a path.")
     result = asyncio.run(run(args))
+    if args.action == "pull" and isinstance(result, dict):
+        details = result["metrics"]
+        result = {
+            "capture_status": result["capture_status"],
+            "evidence": result["evidence"],
+            "report": str(args.artifacts / args.attempt / "report.md"),
+            "sources": {
+                name: {
+                    key: value
+                    for key, value in source.items()
+                    if key in ("status", "reason", "error_type", "manifest", "path")
+                }
+                for name, source in result["sources"].items()
+            },
+            "observed_stream_model_calls": details["observed_model_calls"],
+            "langsmith_reported_cost_usd": details["cost_usd"],
+        }
     print(
         result if isinstance(result, str) else json.dumps(result, indent=2, default=str)
     )
+    if (
+        args.action == "pull"
+        and isinstance(result, dict)
+        and result.get("capture_status") == "partial"
+    ):
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
