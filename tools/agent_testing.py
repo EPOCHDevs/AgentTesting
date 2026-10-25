@@ -230,6 +230,7 @@ class Conversation:
             request = {"message": message, "responses": responses}
             request_file, run_file = target / "request.json", target / "run.json"
             if request_file.exists():
+                self.attempt()  # Cached receipts still belong to one exact stack.
                 if json.loads(request_file.read_text()) != request:
                     raise ValueError(
                         "This turn key already names a different request. Choose a new key."
@@ -415,8 +416,8 @@ class Conversation:
 
 def index(root: Path) -> str:
     lines = [
-        "| Attempt | Owner | Scenario | Thread status | Review |",
-        "|---|---|---|---|---|",
+        "| Attempt | Owner | Scenario | Last observed state | Observed at | Review |",
+        "|---|---|---|---|---|---|",
     ]
     for path in sorted(root.glob("*/attempt.json")):
         attempt = json.loads(path.read_text())
@@ -424,11 +425,13 @@ def index(root: Path) -> str:
             path.with_name("status.json"),
             path.with_name("review.json"),
         )
+        status = json.loads(status_path.read_text()) if status_path.exists() else None
         state = (
-            json.loads(status_path.read_text())["thread_status"]
-            if status_path.exists()
+            ("needs_input" if status["pending"] else status["thread_status"])
+            if status
             else "not observed"
         )
+        observed_at = status["checked_at"] if status else "—"
         review = (
             json.loads(review_path.read_text())["outcome"]
             if review_path.exists()
@@ -439,6 +442,7 @@ def index(root: Path) -> str:
             attempt["owner"],
             attempt.get("scenario") or "—",
             state,
+            observed_at,
             review,
         ]
         lines.append(

@@ -258,6 +258,19 @@ def test_stack_change_is_visible(tmp_path, fake_health):
     app.save(tmp_path / "attempt.json", record)
     with pytest.raises(ValueError, match="different stack"):
         exercise(tmp_path, server, lambda c: c.status())
+    with pytest.raises(ValueError, match="different stack"):
+        exercise(tmp_path, server, ask)
+
+
+def test_index_reports_pending_input_and_snapshot_time(tmp_path, fake_health):
+    folder = tmp_path / "case"
+    server = Server()
+    exercise(folder, server, ask)
+    server.state["interrupts"] = [{"id": "pending", "value": {"question": "Period?"}}]
+    state = exercise(folder, server, lambda c: c.status())
+    table = app.index(tmp_path)
+    assert "needs_input" in table
+    assert state["checked_at"] in table
 
 
 def test_pull_refreshes_runs_and_writes_full_transcript(tmp_path, fake_health):
