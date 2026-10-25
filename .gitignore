@@ -6,6 +6,9 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 artifacts/
+.artifacts/
+dev.local.toml
+.pytest_cache/
 campaigns/**/raw/
 *.log
 .DS_Store

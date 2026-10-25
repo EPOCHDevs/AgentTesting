@@ -1,0 +1,457 @@
+import asyncio
+import json
+from dataclasses import asdict
+from uuid import uuid4
+
+import httpx
+import pytest
+from langgraph_sdk.client import LangGraphClient
+
+from tools import agent_testing as app
+from tools.evidence import render_transcript, summarize
+
+CONFIG = app.DevStack(
+    "https://ai.dev.example", "https://api.dev.example", "https://ui.dev.example"
+)
+STAMP = "2026-10-25T12:00:00+00:00"
+
+
+class Server:
+    """Protocol fake: no model or vendor calls, even if local tokens are present."""
+
+    def __init__(self):
+        self.posts = []
+        self.runs = []
+        self.state = {"values": {"messages": []}, "tasks": [], "next": []}
+        self.lose_response = False
+        self.reject_code = None
+
+    def handle(self, request):
+        path = request.url.path
+        if request.method == "POST":
+            data = json.loads(request.content)
+            self.posts.append((path, data))
+            if path == "/threads":
+                return httpx.Response(
+                    200, json={"thread_id": data["thread_id"], "status": "idle"}
+                )
+            if path.endswith("/runs"):
+                if self.reject_code:
+                    return httpx.Response(
+                        self.reject_code, json={"detail": "request rejected"}
+                    )
+                row = {
+                    "run_id": str(uuid4()),
+                    "thread_id": path.split("/")[2],
+                    "status": "pending",
+                    "metadata": data["metadata"],
+                    "created_at": STAMP,
+                    "updated_at": STAMP,
+                }
+                self.runs.insert(0, row)
+                if self.lose_response:
+                    raise httpx.ReadError("accepted, then disconnected")
+                return httpx.Response(200, json=row)
+        if path.endswith("/state"):
+            return httpx.Response(200, json=self.state)
+        if path.endswith("/runs"):
+            return httpx.Response(200, json=self.runs)
+        if "/runs/" in path:
+            return httpx.Response(
+                200,
+                json=next(
+                    r for r in self.runs if r["run_id"] == path.rsplit("/", 1)[1]
+                ),
+            )
+        return httpx.Response(
+            200, json={"thread_id": path.rsplit("/", 1)[1], "status": "idle"}
+        )
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    import socket
+
+    def blocked(*args, **kwargs):
+        raise AssertionError("Real network is forbidden in offline tests")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+
+
+@pytest.fixture
+def fake_health(monkeypatch):
+    async def check(*args):
+        return {"checked_at": STAMP, "services": asdict(CONFIG)}
+
+    monkeypatch.setattr(app, "check_stack", check)
+
+
+def exercise(folder, server, action):
+    async def run():
+        async with httpx.AsyncClient(
+            base_url=CONFIG.ai_url,
+            transport=httpx.MockTransport(server.handle),
+            headers={"Authorization": "Bearer test-only"},
+        ) as http:
+            return await action(app.Conversation(folder, CONFIG, LangGraphClient(http)))
+
+    return asyncio.run(run())
+
+
+async def ask(c, key="first", message="Compare cash generation"):
+    return await c.submit(
+        key,
+        message=message,
+        responses=None,
+        owner="analyst",
+        scenario="financial-quality",
+        bearer="Bearer test-only",
+    )
+
+
+def test_repeated_cell_does_not_submit_and_followup_keeps_thread(tmp_path, fake_health):
+    server = Server()
+    first = exercise(tmp_path, server, ask)
+    assert exercise(tmp_path, server, ask) == first
+    second = exercise(
+        tmp_path, server, lambda c: ask(c, "followup", "Explain the change")
+    )
+    assert first["thread_id"] == second["thread_id"]
+    assert len(server.runs) == 2
+    payload = next(data for path, data in server.posts if path.endswith("/runs"))
+    assert payload["multitask_strategy"] == "reject"
+    assert payload["stream_resumable"] is True
+    assert payload["stream_subgraphs"] is True
+    assert "test-only" not in json.dumps(payload)
+    assert "Authorization" not in json.dumps(payload)
+    assert "test-only" not in (tmp_path / "attempt.json").read_text()
+    assert "test-only" not in (tmp_path / "turns/first/request.json").read_text()
+
+
+def test_changed_prompt_under_existing_key_is_rejected(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    with pytest.raises(ValueError, match="different request"):
+        exercise(tmp_path, server, lambda c: ask(c, message="Another task"))
+    assert len(server.runs) == 1
+
+
+def test_lost_submit_response_is_recovered_without_another_run(tmp_path, fake_health):
+    server = Server()
+    server.lose_response = True
+    with pytest.raises(httpx.ReadError):
+        exercise(tmp_path, server, ask)
+    server.lose_response = False
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        exercise(tmp_path, server, lambda c: ask(c, "next"))
+    recovered = exercise(tmp_path, server, ask)
+    assert recovered["run_id"] == server.runs[0]["run_id"]
+    assert len(server.runs) == 1
+
+
+def test_unconfirmed_submission_does_not_retry(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    (tmp_path / "turns/first/run.json").unlink()
+    server.runs.clear()
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        exercise(tmp_path, server, ask)
+    assert not server.runs
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 409, 422, 429])
+def test_definitive_rejection_retains_evidence_but_does_not_block_new_turn(
+    tmp_path, fake_health, status
+):
+    server = Server()
+    server.reject_code = status
+    with pytest.raises(httpx.HTTPStatusError):
+        exercise(tmp_path, server, ask)
+    assert (
+        json.loads((tmp_path / "turns/first/rejected.json").read_text())["status_code"]
+        == status
+    )
+    with pytest.raises(RuntimeError, match="server rejected"):
+        exercise(tmp_path, server, ask)
+    server.reject_code = None
+    exercise(tmp_path, server, lambda c: ask(c, "corrected"))
+    assert len(server.runs) == 1
+
+
+@pytest.mark.parametrize("status", [408, 500, 502, 504])
+def test_uncertain_http_failure_still_prevents_resubmit(tmp_path, fake_health, status):
+    server = Server()
+    server.reject_code = status
+    with pytest.raises(httpx.HTTPStatusError):
+        exercise(tmp_path, server, ask)
+    assert not (tmp_path / "turns/first/rejected.json").exists()
+    server.reject_code = None
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        exercise(tmp_path, server, lambda c: ask(c, "next"))
+    assert not server.runs
+
+
+def test_nested_interrupts_and_explicit_distinct_answers(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    server.state["tasks"] = [
+        {"interrupts": [{"id": "one", "value": {"question": "Period?"}}]},
+        {
+            "state": {
+                "tasks": [
+                    {"interrupts": [{"id": "two", "value": {"question": "Costs?"}}]}
+                ]
+            }
+        },
+    ]
+    with pytest.raises(RuntimeError, match="pending"):
+        exercise(tmp_path, server, lambda c: ask(c, "followup"))
+
+    async def answer(c):
+        return await c.submit(
+            "reply",
+            message=None,
+            responses={"one": {"answer": "2020–2025"}, "two": {"answer": "5bps"}},
+            owner="analyst",
+            scenario=None,
+            bearer="Bearer test-only",
+        )
+
+    exercise(tmp_path, server, answer)
+    payload = [data for path, data in server.posts if path.endswith("/runs")][-1]
+    assert payload["command"]["resume"] == {
+        "one": {"answer": "2020–2025"},
+        "two": {"answer": "5bps"},
+    }
+    status = exercise(tmp_path, server, lambda c: c.status())
+    assert set(status["pending"]) == {
+        "one",
+        "two",
+    }  # next=[] does not erase an interrupt
+
+
+def test_rejects_stale_interrupt_answer(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+
+    async def answer(c):
+        return await c.submit(
+            "reply",
+            message=None,
+            responses={"old": {}},
+            owner="analyst",
+            scenario=None,
+            bearer="test",
+        )
+
+    with pytest.raises(ValueError, match="pending"):
+        exercise(tmp_path, server, answer)
+    assert len(server.runs) == 1
+
+
+def test_stack_change_is_visible(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    record = json.loads((tmp_path / "attempt.json").read_text())
+    record["services"]["ai_url"] = "https://different.example"
+    app.save(tmp_path / "attempt.json", record)
+    with pytest.raises(ValueError, match="different stack"):
+        exercise(tmp_path, server, lambda c: c.status())
+    with pytest.raises(ValueError, match="different stack"):
+        exercise(tmp_path, server, ask)
+
+
+def test_index_reports_pending_input_and_snapshot_time(tmp_path, fake_health):
+    folder = tmp_path / "case"
+    server = Server()
+    exercise(folder, server, ask)
+    server.state["interrupts"] = [{"id": "pending", "value": {"question": "Period?"}}]
+    state = exercise(folder, server, lambda c: c.status())
+    table = app.index(tmp_path)
+    assert "needs_input" in table
+    assert state["checked_at"] in table
+
+
+def test_pull_refreshes_runs_and_writes_full_transcript(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    server.runs[0].update(status="success", updated_at="2026-10-25T12:00:12+00:00")
+    server.state["values"]["messages"] = [
+        {"type": "human", "content": "Question"},
+        {"type": "ai", "content": "A" * 10000},
+    ]
+    result = exercise(tmp_path, server, lambda c: c.pull())
+    assert "A" * 10000 in (tmp_path / "conversation.md").read_text()
+    assert result["metrics"]["runs"][0]["server_elapsed_seconds"] == 12
+    assert result["metrics"]["observed_model_calls"] == 0
+    assert result["metrics"]["input_tokens"] is None
+    assert result["metrics"]["cost_usd"] is None
+
+
+def test_per_attempt_records_and_no_automatic_review(tmp_path, fake_health):
+    for name in ("a", "b"):
+        exercise(tmp_path / name, Server(), ask)
+    result = app.index(tmp_path)
+    assert result.count("not reviewed") == 2
+    assert (tmp_path / "a/attempt.json").read_text() != (
+        tmp_path / "b/attempt.json"
+    ).read_text()
+
+
+def test_single_writer_lock(tmp_path):
+    with app.writer(tmp_path):
+        with pytest.raises(BlockingIOError):
+            with app.writer(tmp_path):
+                pytest.fail("second writer acquired the same attempt")
+
+
+def test_usage_deduplicates_cumulative_messages_and_excludes_other_channels(tmp_path):
+    p = tmp_path / "streams/run/events.jsonl"
+    p.parent.mkdir(parents=True)
+
+    def event(kind, mid, total):
+        return {
+            "event": kind,
+            "data": [
+                {
+                    "id": mid,
+                    "name": "author",
+                    "usage_metadata": {
+                        "input_tokens": 10,
+                        "output_tokens": total - 10,
+                        "total_tokens": total,
+                    },
+                },
+                {},
+            ],
+        }
+
+    rows = [
+        event("messages", "a", 11),
+        event("messages", "a", 14),
+        event("values", "provider-a", 14),
+        event("messages", "a", 14),
+    ]
+    p.write_text("\n".join(map(json.dumps, rows)))
+    result = summarize(tmp_path)
+    assert result["observed_model_calls"] == 1
+    assert result["input_tokens"] == 10
+    assert result["output_tokens"] == 4
+
+
+def test_config_does_not_accept_credentials_in_url(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        '[dev]\nai_url="https://name:secret@ai.example"\nbackend_url="https://b.example"\nui_url="https://u.example"'
+    )
+    with pytest.raises(ValueError, match="credentials"):
+        app.DevStack.load(p)
+
+
+def test_transcript_excludes_non_public_reasoning_blocks():
+    result = render_transcript(
+        {
+            "values": {
+                "messages": [
+                    {
+                        "type": "ai",
+                        "content": [
+                            {"type": "thinking", "thinking": "private"},
+                            {"type": "text", "text": "Answer"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    assert "Answer" in result
+    assert "private" not in result
+
+
+def test_resumable_stream_keeps_cursor_and_does_not_cancel_server(
+    tmp_path, fake_health
+):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    requests = []
+    handle = server.handle
+
+    def stream(request):
+        if request.url.path.endswith("/stream"):
+            requests.append(request)
+            body = (
+                "id: 7\nevent: messages\ndata: "
+                + json.dumps(
+                    [
+                        {
+                            "id": "model1",
+                            "usage_metadata": {
+                                "input_tokens": 30,
+                                "output_tokens": 5,
+                                "total_tokens": 35,
+                            },
+                        },
+                        {},
+                    ]
+                )
+                + "\n\n"
+            )
+            return httpx.Response(
+                200, content=body, headers={"content-type": "text/event-stream"}
+            )
+        return handle(request)
+
+    server.handle = stream
+    exercise(tmp_path, server, lambda c: c.pull(follow=True))
+    exercise(tmp_path, server, lambda c: c.pull(follow=True))
+    assert requests[1].headers["last-event-id"] == "7"
+    assert all(r.url.params.get("cancel_on_disconnect") != "true" for r in requests)
+    assert summarize(tmp_path)["observed_model_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "ready,backend,status,passes",
+    [
+        (True, CONFIG.backend_url, "healthy", True),
+        (False, CONFIG.backend_url, "healthy", False),
+        (True, "https://wrong.example", "healthy", False),
+        (True, CONFIG.backend_url, "misconfigured", False),
+    ],
+)
+def test_readiness_checks_service_identity_and_ui_has_no_token(
+    monkeypatch, ready, backend, status, passes
+):
+    captured = []
+
+    def handle(request):
+        captured.append(request)
+        if request.url.host == "ai.dev.example":
+            return httpx.Response(
+                200,
+                json={
+                    "status": status,
+                    "build_study": {"ready": ready, "backend_url": backend},
+                },
+            )
+        if request.url.host == "api.dev.example":
+            return httpx.Response(200, json={"status": "ok", "git_sha": "backend-sha"})
+        return httpx.Response(200, text="<html>UI</html>")
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        app.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handle), **kw),
+    )
+    if passes:
+        result = asyncio.run(app.check_stack(CONFIG, "Bearer test-only"))
+        assert result["backend"]["git_sha"] == "backend-sha"
+        assert result["ui"]["revision"] is None
+    else:
+        with pytest.raises(RuntimeError):
+            asyncio.run(app.check_stack(CONFIG, "Bearer test-only"))
+    assert (
+        "authorization"
+        not in next(r for r in captured if r.url.host == "ui.dev.example").headers
+    )
