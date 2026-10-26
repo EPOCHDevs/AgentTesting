@@ -85,6 +85,16 @@ build revision; rebuild it from that source through the normal Backend workflow.
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
 
+To populate the local Rates and Calendar pages, set `market_pages = true` after
+building a Backend version that includes Calendar. This enables native source
+capture, page publication and automatic refresh using the configured vendors.
+It updates only the generated `build/bin/config.json` Calendar settings and
+supplies the Rates settings to the process; source configuration stays unchanged.
+Set `market_pages = false` to disable automatic page work. Omitting it leaves
+the existing runtime settings alone. Page preparation does not start LLM work;
+opening a Rates context can run its declared text model, and previously accepted
+context tasks can resume after a restart. Calendar V1 event rows remain read-only.
+
 The launcher asks for your Epoch email/password on first use, starts Backend →
 AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
 sign in with the same account. The CLI and browser maintain separate sessions.
@@ -99,8 +109,8 @@ still require their configured token variable.
 
 Service logs, AI state and Backend study records stay under
 `.artifacts/local-stack/`. The generated AI configuration can contain service
-keys and is private; do not publish this directory. Product configuration files
-are left unchanged. Backend listener addresses still follow its existing
+keys and is private; do not publish this directory. Product source configuration
+files are left unchanged. Backend listener addresses still follow its existing
 `config.json`. The launcher does not build, install dependencies, submit research,
 or deploy anything. To change ports, pass `--environments environments.local.toml`
 and use that same file with the conversation CLI.
