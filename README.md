@@ -140,6 +140,10 @@ changing its input is rejected. An uncertain submission is never silently retrie
 A definite server rejection is recorded separately; correct its cause and submit
 under a new key. Failed attempts remain available for review.
 
+The CLI prints run identities, status and pending questions. Server-returned run
+configuration stays out of terminal output because it can contain authentication
+data. Raw diagnostic artifacts remain private under `.artifacts/`.
+
 For a clarification, `status` shows the current interrupt IDs and payloads. Write
 a local JSON file mapping the selected IDs to their explicit response payloads,
 then use `answer industrial-01 --key clarification-1 --responses /path/to/answers.json`.

@@ -68,6 +68,28 @@ class RunHistory(TypedDict):
     runs: list[Run]
 
 
+class RunReceipt(TypedDict):
+    run_id: str
+    thread_id: str
+    status: str
+    created_at: NotRequired[str]
+    updated_at: NotRequired[str]
+
+
+def run_receipt(run: Run) -> RunReceipt:
+    """CLI identity/status only; server configuration may contain credentials."""
+    receipt: RunReceipt = {
+        "run_id": run["run_id"],
+        "thread_id": run["thread_id"],
+        "status": run["status"],
+    }
+    if run.get("created_at"):
+        receipt["created_at"] = str(run["created_at"])
+    if run.get("updated_at"):
+        receipt["updated_at"] = str(run["updated_at"])
+    return receipt
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -902,7 +924,19 @@ def main() -> None:
     ):
         parser.error("Use a simple attempt name, not a path.")
     result = asyncio.run(run(args))
-    if args.action == "pull" and isinstance(result, dict):
+    if args.action in ("ask", "answer"):
+        result = run_receipt(cast(Run, result))
+    elif args.action in ("status", "attach"):
+        status = cast(Status, result)
+        result = {
+            "checked_at": status["checked_at"],
+            "environment": status["environment"],
+            "thread_id": status["thread_id"],
+            "thread_status": status["thread_status"],
+            "pending": status["pending"],
+            "runs": [run_receipt(item) for item in status["runs"]],
+        }
+    elif args.action == "pull" and isinstance(result, dict):
         details = result["metrics"]
         result = {
             "environment": result["environment"],
