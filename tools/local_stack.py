@@ -63,12 +63,24 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
     return config, resolved
 
 
-def configure_market_pages(binary: Path, enabled: bool | None) -> dict[str, str]:
+def configure_market_pages(
+    binary: Path, enabled: bool | None, *, catalog_root: str | None = None
+) -> dict[str, str]:
     """Apply an explicit local Markets choice to the generated runtime config."""
     if enabled is None:
         return {}
     if not isinstance(enabled, bool):
         raise ValueError("market_pages must be true or false.")
+    if enabled and (
+        not catalog_root
+        or not Path(catalog_root).is_absolute()
+        or not (Path(catalog_root) / "current/catalog_manifest.json").is_file()
+    ):
+        raise ValueError(
+            "Market pages require EPOCH_CATALOG_ROOT in the primary Backend .env.local, "
+            "pointing to an absolute path with a selected catalogue generation. "
+            "Backend validates that generation; an unversioned asset file is insufficient."
+        )
     path = binary.parent / "config.json"
     document = json.loads(path.read_text())
     plugins = [
@@ -268,9 +280,10 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "COGNITO_CLIENT_ID": CLIENT,
         "COGNITO_CLIENT_IDS": CLIENT,
     }
+    backend_values = read_env(paths["backend_env"])
     backend_env = {
         **base,
-        **read_env(paths["backend_env"]),
+        **backend_values,
         **common,
         "PORT": str(ports[0]),
         "EPOCH_SKIP_LOAD_JOBS": "0",
@@ -278,7 +291,11 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "EPOCH_JOB_STAGING_DIR": str(private_dir(state / "backend/staging")),
         "EPOCH_ENDPOINT_CACHE_DIR": str(private_dir(state / "backend/cache")),
         "EPOCH_COMPILER_METADATA_DIR": str(binary.parent / "compiler_metadata"),
-        **configure_market_pages(binary, config.get("market_pages")),
+        **configure_market_pages(
+            binary,
+            config.get("market_pages"),
+            catalog_root=backend_values.get("EPOCH_CATALOG_ROOT"),
+        ),
     }
 
     # LangGraph loads its config env after process env. Supply local overrides
