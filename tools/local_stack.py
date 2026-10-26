@@ -217,7 +217,6 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             f"{name}: {revision['branch']} @ {revision['commit'][:10]} ({revision['path']})",
             flush=True,
         )
-    (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
@@ -310,6 +309,15 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
     graph_config = json.loads((ai / "langgraph.json").read_text())
     env_source = graph_config.get("env", {})
     ai_values = read_env(ai / env_source) if isinstance(env_source, str) else env_source
+    # A local launch is a versioned deployment too. Keep operator overrides;
+    # otherwise identify it by the clean, verified AI source actually launched.
+    revision = ai_values.get("EPOCH_COMMENTARY_DEPLOYMENT_REVISION", "").strip()
+    if not revision:
+        revision = "local-" + revisions["EpochAI"]["commit"]
+    ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
+    revisions["EpochAI"]["commentary_deployment_revision"] = revision
+    (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
+    print(f"Local commentary deployment: {revision}", flush=True)
     ai_env = {**base, **ai_values, **common}
     graph_config["env"] = {**ai_values, **common}
     graph_config["dependencies"] = [

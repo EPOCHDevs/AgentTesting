@@ -104,6 +104,11 @@ context tasks can resume after a restart. Calendar V1 event rows remain read-onl
 The launcher asks for your Epoch email/password on first use, starts Backend →
 AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
 sign in with the same account. The CLI and browser maintain separate sessions.
+The local commentary deployment is identified by the verified AI commit, or by
+`EPOCH_COMMENTARY_DEPLOYMENT_REVISION` in the AI environment when explicitly set.
+It is recorded in `source-checkouts.json`; rotate an explicit revision when a
+remote model deployment changes without a source change. Readiness checks the
+commentary policy without making a model call.
 Ctrl+C stops only the services started by this command. An occupied port or a
 failed service stops startup; the launcher never substitutes a hosted service.
 

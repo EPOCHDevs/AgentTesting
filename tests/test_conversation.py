@@ -629,6 +629,10 @@ def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment)
         if request.url.path == "/api/v1/health":
             assert request.url.netloc == httpx.URL(config.backend_url).netloc
             return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/api/v1/execution-extensions/commentary-policy":
+            assert request.url.netloc == httpx.URL(config.ai_url).netloc
+            assert request.headers["Authorization"] == "Bearer test-only"
+            return httpx.Response(200, json={"model_policy": "execution_commentary.v1"})
         if str(request.url).rstrip("/") == config.ui_url.rstrip("/"):
             assert "authorization" not in request.headers
             return httpx.Response(200, text="UI")
@@ -777,21 +781,26 @@ def test_resumable_stream_keeps_cursor_and_does_not_cancel_server(
 
 
 @pytest.mark.parametrize(
-    "ready,backend,status,passes",
+    "ready,backend,status,commentary_status,passes",
     [
-        (True, CONFIG.backend_url, "healthy", True),
-        (False, CONFIG.backend_url, "healthy", False),
-        (True, "https://wrong.example", "healthy", False),
-        (True, CONFIG.backend_url, "misconfigured", False),
+        (True, CONFIG.backend_url, "healthy", 200, True),
+        (False, CONFIG.backend_url, "healthy", 200, False),
+        (True, "https://wrong.example", "healthy", 200, False),
+        (True, CONFIG.backend_url, "misconfigured", 200, False),
+        (True, CONFIG.backend_url, "healthy", 503, False),
     ],
 )
 def test_readiness_checks_service_identity_and_ui_has_no_token(
-    monkeypatch, ready, backend, status, passes
+    monkeypatch, ready, backend, status, commentary_status, passes
 ):
     captured = []
 
     def handle(request):
         captured.append(request)
+        if request.url.path == "/api/v1/execution-extensions/commentary-policy":
+            assert request.url.host == "ai.dev.example"
+            assert request.headers["Authorization"] == "Bearer test-only"
+            return httpx.Response(commentary_status, json={"model_policy": "execution_commentary.v1"})
         if request.url.host == "ai.dev.example":
             return httpx.Response(
                 200,
