@@ -27,7 +27,11 @@ def test_explicit_market_choice_preserves_other_runtime_configuration(tmp_path):
         ],
     }
     path.write_text(json.dumps(original))
-    env = configure_market_pages(tmp_path / "server", True)
+    catalog = tmp_path / "catalog"
+    (catalog / "current").mkdir(parents=True)
+    # This check only establishes selection. Native startup validates contents.
+    (catalog / "current/catalog_manifest.json").write_text("{}")
+    env = configure_market_pages(tmp_path / "server", True, catalog_root=str(catalog))
     updated = json.loads(path.read_text())
     assert updated["listeners"] == original["listeners"]
     assert updated["plugins"][0] == original["plugins"][0]
@@ -67,5 +71,19 @@ def test_missing_native_plugin_is_explicit_and_does_not_edit_config(tmp_path):
     original = '{"plugins": []}'
     path.write_text(original)
     with pytest.raises(ValueError, match="exactly one"):
-        configure_market_pages(tmp_path / "server", True)
+        configure_market_pages(tmp_path / "server", False)
     assert path.read_text() == original
+
+
+@pytest.mark.parametrize("catalog_root", [None, "relative/catalog"])
+def test_enabling_market_pages_requires_selected_catalog_before_editing(tmp_path, catalog_root):
+    path = tmp_path / "config.json"
+    path.write_text("unchanged")
+    with pytest.raises(ValueError, match="EPOCH_CATALOG_ROOT"):
+        configure_market_pages(tmp_path / "server", True, catalog_root=catalog_root)
+    assert path.read_text() == "unchanged"
+
+
+def test_unselected_catalog_does_not_enable_market_pages(tmp_path):
+    with pytest.raises(ValueError, match="selected catalogue"):
+        configure_market_pages(tmp_path / "server", True, catalog_root=str(tmp_path))
