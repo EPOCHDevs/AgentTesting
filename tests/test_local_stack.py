@@ -33,13 +33,21 @@ def test_occupied_port_is_not_reused():
 
 
 def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
-    ai, ui, backend = [tmp_path / name for name in ("ai", "ui", "backend")]
-    for file in (backend / "server", ai / ".venv/bin/langgraph"):
+    ai, ui, backend = [
+        tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend")
+    ]
+    monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(local_stack, "verify_primary_checkouts", lambda: {})
+    for file in (
+        backend / "build-dev/bin/epoch_stratifyx_server",
+        ai / ".venv/bin/langgraph",
+    ):
         file.parent.mkdir(parents=True, exist_ok=True)
         file.touch()
         file.chmod(0o700)
     (ui / "node_modules").mkdir(parents=True)
-    (backend / ".env").write_text(
+    (backend / "services/stratifyx").mkdir(parents=True)
+    (backend / "services/stratifyx/.env.local").write_text(
         "EPOCH_ENVIRONMENT=prod\nEPOCH_SKIP_AUTH=1\nVENDOR_KEY=private\n"
     )
     (ai / ".env").write_text(
@@ -55,9 +63,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
     }
     (ai / "langgraph.json").write_text(json.dumps(graph))
     config = tmp_path / "local.toml"
-    config.write_text(
-        'backend_binary="backend/server"\nbackend_env="backend/.env"\nai_dir="ai"\nui_dir="ui"\n'
-    )
+    config.write_text("")
     monkeypatch.setenv("EPOCH_TOKEN", "must-not-inherit")
     monkeypatch.setenv("TEST_EPOCH_PASSWORD", "must-not-inherit")
     monkeypatch.setattr(local_stack.shutil, "which", lambda name, **_: "/bin/" + name)
