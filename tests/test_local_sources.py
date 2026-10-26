@@ -50,7 +50,7 @@ def test_defaults_use_primary_directories_without_a_config(projects):
     assert paths["ui_dir"] == projects / "EpochClientPortal"
     assert (
         paths["backend_binary"]
-        == projects / "EpochBackend/build-dev/bin/epoch_stratifyx_server"
+        == projects / "EpochBackend/build/bin/epoch_stratifyx_server"
     )
     records = local_stack.verify_primary_checkouts()
     assert {
@@ -70,7 +70,7 @@ def test_old_worktree_config_is_rejected_before_git_or_auth(projects):
 def test_binary_cannot_be_symlinked_from_a_worktree(projects):
     outside = projects / "old-server"
     outside.touch()
-    binary = projects / "EpochBackend/build-dev/bin/epoch_stratifyx_server"
+    binary = projects / "EpochBackend/build/bin/epoch_stratifyx_server"
     binary.parent.mkdir(parents=True)
     binary.symlink_to(outside)
     with pytest.raises(ValueError, match="must not be redirected"):
@@ -81,7 +81,7 @@ def test_binary_cannot_come_from_a_nested_worktree(projects):
     nested = projects / "EpochBackend/.worktrees/feature/build/bin/server"
     nested.parent.mkdir(parents=True)
     nested.touch()
-    binary = projects / "EpochBackend/build-dev/bin/epoch_stratifyx_server"
+    binary = projects / "EpochBackend/build/bin/epoch_stratifyx_server"
     binary.parent.mkdir(parents=True)
     binary.symlink_to(nested)
     with pytest.raises(ValueError, match="must not be redirected"):

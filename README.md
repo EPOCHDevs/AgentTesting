@@ -71,7 +71,7 @@ uncommitted tracked changes, and compares each checkout with its current remote
 branch. It prints and records the source commits. It never switches or pulls
 repositories automatically. Worktree/path overrides are not enabled.
 
-Use the primary Backend's existing `build-dev/bin/epoch_stratifyx_server`, the
+Use the primary Backend's existing `build/bin/epoch_stratifyx_server`, the
 primary EpochAI's `.venv`, and installed UI dependencies (Node 24+ with Corepack
 and the UI's pinned pnpm). Source freshness does not certify a native executable's
 build revision; rebuild it from that source through the normal Backend workflow.

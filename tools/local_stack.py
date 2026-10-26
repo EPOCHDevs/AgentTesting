@@ -33,7 +33,7 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
     config = tomllib.loads(config_file.read_text()) if config_file.exists() else {}
     paths = {
         "backend_binary": PROJECT_ROOT
-        / "EpochBackend/build-dev/bin/epoch_stratifyx_server",
+        / "EpochBackend/build/bin/epoch_stratifyx_server",
         "backend_env": PROJECT_ROOT / "EpochBackend/services/stratifyx/.env.local",
         "ai_dir": PROJECT_ROOT / "EpochAI",
         "ui_dir": PROJECT_ROOT / "EpochClientPortal",
