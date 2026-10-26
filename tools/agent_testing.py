@@ -139,6 +139,14 @@ class Stack:
 
     def bearer(self) -> str:
         value = os.environ.get(self.token_env)
+        if (
+            not value
+            and self.environment == "local"
+            and self.token_env == "EPOCH_TOKEN"
+        ):
+            from tools.local_auth import cached_token
+
+            value = cached_token()
         if not value:
             raise ValueError(
                 f"Set {self.token_env} to your Epoch identity token; credentials are never stored in this repo."
@@ -212,21 +220,25 @@ async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
     }
 
 
+def read_attempt(folder: Path, config: Stack) -> Attempt:
+    record = cast(Attempt, json.loads((folder / "attempt.json").read_text()))
+    if record.get("environment", "dev") != config.environment:
+        raise ValueError(
+            f"This attempt belongs to {record.get('environment', 'dev')}; select that environment or use a new attempt name."
+        )
+    if record["services"] != config.identity():
+        raise ValueError(
+            "This attempt belongs to a different stack. Keep its original configuration."
+        )
+    return record
+
+
 class Conversation:
     def __init__(self, folder: Path, config: Stack, client: LangGraphClient):
         self.folder, self.config, self.client = folder, config, client
 
     def attempt(self) -> Attempt:
-        record = cast(Attempt, json.loads((self.folder / "attempt.json").read_text()))
-        if record.get("environment", "dev") != self.config.environment:
-            raise ValueError(
-                f"This attempt belongs to {record.get('environment', 'dev')}; select that environment or use a new attempt name."
-            )
-        if record["services"] != self.config.identity():
-            raise ValueError(
-                "This attempt belongs to a different stack. Keep its original configuration."
-            )
-        return record
+        return read_attempt(self.folder, self.config)
 
     async def attach(
         self, thread_id: str, *, owner: str, scenario: str | None
@@ -774,6 +786,10 @@ async def run(args: argparse.Namespace) -> object:
             evidence=args.evidence or [],
         )
     config = Stack.load(args.config, args.env)
+    if args.action != "check":
+        folder = args.artifacts / args.attempt
+        if (folder / "attempt.json").exists():
+            read_attempt(folder, config)  # Before even a cached-login refresh.
     bearer = config.bearer()
     if args.action == "check":
         return await check_stack(config, bearer)

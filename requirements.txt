@@ -1,3 +1,5 @@
 langgraph-sdk==0.4.4
 httpx==0.28.1
 langsmith==0.14.12
+pycognito==2024.5.1
+python-dotenv==1.2.1
