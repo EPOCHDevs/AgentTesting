@@ -20,6 +20,91 @@ from dotenv import dotenv_values
 from tools.agent_testing import Stack, check_stack
 from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_BRANCHES = {
+    "EpochBackend": "main",
+    "EpochAI": "dev",
+    "EpochClientPortal": "dev",
+}
+
+
+def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
+    """The default stack always uses the three primary sibling repositories."""
+    config = tomllib.loads(config_file.read_text()) if config_file.exists() else {}
+    paths = {
+        "backend_binary": PROJECT_ROOT
+        / "EpochBackend/build-dev/bin/epoch_stratifyx_server",
+        "backend_env": PROJECT_ROOT / "EpochBackend/services/stratifyx/.env.local",
+        "ai_dir": PROJECT_ROOT / "EpochAI",
+        "ui_dir": PROJECT_ROOT / "EpochClientPortal",
+    }
+    unknown = set(config) - set(paths) - {"node_bin"}
+    if unknown:
+        raise ValueError(
+            f"Unknown local launcher settings: {', '.join(sorted(unknown))}"
+        )
+    for key, expected in paths.items():
+        if key in config:
+            supplied = (
+                config_file.resolve().parent / Path(config[key]).expanduser()
+            ).resolve()
+            if supplied != expected.resolve():
+                raise ValueError(
+                    f"{key} must use the primary project path {expected}. "
+                    "Worktree overrides are not enabled; remove the old path from local-stack.toml."
+                )
+    resolved = {key: path.resolve() for key, path in paths.items()}
+    for key in paths:
+        if resolved[key] != paths[key]:
+            raise ValueError(
+                f"{key} must not be redirected by a symlink; use the fixed primary project path."
+            )
+    return config, resolved
+
+
+def verify_primary_checkouts() -> dict[str, dict[str, str]]:
+    """Read-only preflight; never switch branches or rewrite someone else's work."""
+    records = {}
+    for project, expected in PROJECT_BRANCHES.items():
+        directory = PROJECT_ROOT / project
+        if not (directory / ".git").is_dir():
+            raise ValueError(
+                f"{directory} must be a primary Git checkout, not a linked worktree."
+            )
+
+        def git(*args: str) -> str:
+            try:
+                return subprocess.check_output(
+                    ["git", "-C", str(directory), *args],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                ).strip()
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                raise ValueError(
+                    f"Could not verify {project} against origin/{expected}; startup stopped."
+                ) from None
+
+        branch = git("branch", "--show-current")
+        if branch != expected:
+            raise ValueError(
+                f"{project} is on {branch or 'a detached HEAD'}; check out {expected} first."
+            )
+        if git("status", "--porcelain", "--untracked-files=no"):
+            raise ValueError(
+                f"{project} has uncommitted tracked changes; resolve them before starting the default stack."
+            )
+        commit = git("rev-parse", "HEAD")
+        remote = git(
+            "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{expected}"
+        ).split()[0]
+        if commit != remote:
+            raise ValueError(
+                f"{project} is not synchronized with origin/{expected}. Update that checkout first."
+            )
+        records[project] = {"path": str(directory), "branch": branch, "commit": commit}
+    return records
+
 
 def private_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -65,12 +150,15 @@ def check_ports(ports: list[int]) -> None:
 
 
 def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
-    config = tomllib.loads(config_file.read_text())
-
-    def path(key: str) -> Path:
-        return (config_file.resolve().parent / Path(config[key]).expanduser()).resolve()
-
-    binary, ai, ui = path("backend_binary"), path("ai_dir"), path("ui_dir")
+    config, paths = primary_paths(config_file)
+    revisions = verify_primary_checkouts()
+    for name, revision in revisions.items():
+        print(
+            f"{name}: {revision['branch']} @ {revision['commit'][:10]} ({revision['path']})",
+            flush=True,
+        )
+    (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
+    binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
         if not os.access(executable, os.X_OK):
@@ -103,7 +191,10 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         }
     }
     if "node_bin" in config:
-        base["PATH"] = str(path("node_bin")) + os.pathsep + base.get("PATH", "")
+        node_bin = (
+            config_file.resolve().parent / Path(config["node_bin"]).expanduser()
+        ).resolve()
+        base["PATH"] = str(node_bin) + os.pathsep + base.get("PATH", "")
     corepack = shutil.which("corepack", path=base.get("PATH"))
     node = shutil.which("node", path=base.get("PATH"))
     if not corepack or not node:
@@ -138,7 +229,7 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
     }
     backend_env = {
         **base,
-        **read_env(path("backend_env")),
+        **read_env(paths["backend_env"]),
         **common,
         "PORT": str(ports[0]),
         "EPOCH_SKIP_LOAD_JOBS": "0",
@@ -304,10 +395,6 @@ def main() -> None:
             parser.exit(1, "The local launcher is already running.\n")
         try:
             stack = Stack.load(args.environments, "local")
-            if not args.config.exists():
-                raise ValueError(
-                    "Copy local-stack.example.toml to local-stack.toml and select your checkouts."
-                )
             check_ports(local_ports(stack))
             services = prepare(args.config, stack, state)
             bearer = (

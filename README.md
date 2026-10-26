@@ -58,15 +58,32 @@ the environment stored with the attempt.
 
 ## Start locally
 
-Use the existing Backend build, EpochAI virtual environment and installed UI
-dependencies (Node 24+ with Corepack and the UI's pinned pnpm installed). Select
-their paths once:
+The launcher uses the primary repositories beside AgentTesting:
+
+| Directory | Branch |
+|---|---|
+| `EpochBackend/` | `main` |
+| `EpochAI/` | `dev` |
+| `EpochClientPortal/` | `dev` |
+
+Before login or startup it checks those branches, rejects linked worktrees and
+uncommitted tracked changes, and compares each checkout with its current remote
+branch. It prints and records the source commits. It never switches or pulls
+repositories automatically. Worktree/path overrides are not enabled.
+
+Use the primary Backend's existing `build-dev/bin/epoch_stratifyx_server`, the
+primary EpochAI's `.venv`, and installed UI dependencies (Node 24+ with Corepack
+and the UI's pinned pnpm). Source freshness does not certify a native executable's
+build revision; rebuild it from that source through the normal Backend workflow.
 
 ```bash
-cp local-stack.example.toml local-stack.toml
-# Edit local-stack.toml to point at your checkouts and Backend executable.
 .venv/bin/python -m tools.local_stack
 ```
+
+`local-stack.toml` is optional and may set `node_bin`; see
+`local-stack.example.toml`. Remove old worktree paths from an existing local
+configuration. A missing primary build/dependency is an explicit error, never a
+fallback to another checkout.
 
 The launcher asks for your Epoch email/password on first use, starts Backend →
 AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
