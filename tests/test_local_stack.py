@@ -39,7 +39,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
     monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(local_stack, "verify_primary_checkouts", lambda: {})
     for file in (
-        backend / "build-dev/bin/epoch_stratifyx_server",
+        backend / "build/bin/epoch_stratifyx_server",
         ai / ".venv/bin/langgraph",
     ):
         file.parent.mkdir(parents=True, exist_ok=True)
