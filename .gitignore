@@ -8,6 +8,7 @@ __pycache__/
 artifacts/
 .artifacts/
 dev.local.toml
+environments.local.toml
 .pytest_cache/
 campaigns/**/raw/
 *.log

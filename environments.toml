@@ -1,0 +1,22 @@
+# Explicit targets. The CLI defaults to dev; no automatic environment fallback.
+[local]
+backend_url = "http://localhost:9000"
+ai_url = "http://localhost:2024"
+ui_url = "http://localhost:3000"
+assistant_id = "epoch-ai"
+token_env = "EPOCH_TOKEN"
+
+[dev]
+backend_url = "https://api.dev.epoch.trade"
+ai_url = "https://dev-server-75332ad41d165993bce742c3da685d9a.aws.us.langgraph.app"
+ui_url = "https://app.dev.epoch.trade"
+assistant_id = "epoch-ai"
+token_env = "EPOCH_TOKEN"
+
+# Production endpoints from the existing EpochAI/Portal deployment configuration.
+[prod]
+backend_url = "https://prod-server.epoch.trade"
+ai_url = "https://prod-0969965f453e5cecb384e0b6cbc1273f.us.langgraph.app"
+ui_url = "https://www.app.epoch.trade"
+assistant_id = "epoch-ai"
+token_env = "EPOCH_TOKEN"

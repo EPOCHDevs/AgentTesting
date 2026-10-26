@@ -24,17 +24,43 @@ writes. A completed conversation is not automatically a passing result.
 CLI, API and direct UI interaction are possible ways to drive a conversation.
 Notebooks are an optional way to run or review it.
 
-## Use the shared dev stack
+## Choose a stack
 
 Requires Python 3.12+ on Linux or macOS.
-
-`dev.toml` binds the Backend, AI and UI. The runner checks AI readiness and its
-reported Backend address before sending work. It records the reported server
-versions for each submission. Connecting to dev does not deploy a product branch.
 
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+`environments.toml` contains `local`, `dev` and `prod` profiles. **Dev is the
+default.** Select another explicitly with `--env` before the command:
+
+```bash
+.venv/bin/python -m tools.agent_testing --env local check
+.venv/bin/python -m tools.agent_testing check                 # dev
+.venv/bin/python -m tools.agent_testing --env prod status prod-review-01
+```
+
+Local defaults are Backend `localhost:9000`, AI `localhost:2024`, and UI
+`localhost:3000`. To use different ports, copy the file to the ignored
+`environments.local.toml`, edit that profile, and pass
+`--config environments.local.toml --env local`. Selecting a profile does not
+start or restart its services. HTTP is allowed for local; hosted profiles require HTTPS.
+The former `dev.toml` is now `environments.toml`; existing custom `[dev]` files
+still work when passed with `--config`.
+
+Each attempt records its environment and exact service addresses. Use a new
+attempt name when comparing environments; reconnecting under a different
+profile is rejected before network access. Existing dev attempts remain readable.
+The global index shows all recorded environments, and offline reports identify
+the environment stored with the attempt.
+
+The runner checks AI readiness and its
+reported Backend address before sending work. It records the reported server
+versions for each submission. Selecting a stack does not deploy a product branch.
+
+```bash
 # Supply EPOCH_TOKEN through your existing Epoch login; do not commit it.
 .venv/bin/python -m tools.agent_testing check
 .venv/bin/python -m tools.agent_testing ask industrial-01 --key opening --owner researcher-a \
@@ -72,7 +98,9 @@ A conversation started in the UI can be attached without sending a message:
 
 For `--traces`, configure `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` and
 `LANGSMITH_API_KEY` in the environment; `LANGSMITH_WORKSPACE_ID` is optional.
-Choose the deployed agent's tracing project explicitly. Never commit the key.
+Choose the selected stack's tracing project explicitly. A profile switch does
+not guess or change LangSmith credentials. Each profile's `token_env` can name
+its own Epoch token variable when credentials differ. Never commit the keys.
 
 The pull collects the thread and full run list, LangSmith trace trees, and Backend
 records for the thread's accepted execution IDs. An explicit `--execution-id ID`
@@ -102,6 +130,6 @@ numerical answer keys separate from the researcher brief. See the
 Only `ask` and `answer` initiate agent runs. Validation includes offline protocol
 tests and read-only retrieval of existing hosted Backend executions. No new live
 research acceptance is claimed; complete agent-trace validation needs an
-accessible shared-dev thread.
+accessible thread in the selected environment.
 Keep credentials and raw session artifacts outside version control. Publish
 reviewed examples only.

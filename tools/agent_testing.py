@@ -1,4 +1,4 @@
-"""Conversation driver for a dedicated development stack.
+"""Conversation driver for an explicitly selected local, dev or prod stack.
 
 Adapted from EpochAI's supervisor CLI: persistent threads, explicit interrupt
 replies and live capture. Product implementation imports and database access
@@ -17,10 +17,10 @@ import tempfile
 import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
@@ -31,6 +31,7 @@ from langgraph_sdk.schema import Command, Run, ThreadState
 from tools.evidence import render_transcript, summarize
 
 ROOT = Path(__file__).resolve().parents[1]
+Environment = Literal["local", "dev", "prod"]
 
 
 class ServiceIdentity(TypedDict):
@@ -48,6 +49,7 @@ class Attempt(TypedDict):
     created_at: str
     services: ServiceIdentity
     attached: NotRequired[bool]
+    environment: NotRequired[Environment]
 
 
 class Status(TypedDict):
@@ -56,6 +58,7 @@ class Status(TypedDict):
     thread_status: str
     pending: dict[str, object]
     runs: list[Run]
+    environment: Environment
 
 
 class RunHistory(TypedDict):
@@ -89,20 +92,40 @@ def writer(folder: Path) -> Iterator[None]:
 
 
 @dataclass(frozen=True)
-class DevStack:
+class Stack:
     ai_url: str
     backend_url: str
     ui_url: str
     assistant_id: str = "epoch-ai"
     token_env: str = "EPOCH_TOKEN"
+    environment: Environment = "dev"
+
+    def identity(self) -> ServiceIdentity:
+        # Preserve the established endpoint receipt shape. Profile selection is
+        # recorded separately so existing dev attempts remain readable.
+        return {
+            "ai_url": self.ai_url,
+            "backend_url": self.backend_url,
+            "ui_url": self.ui_url,
+            "assistant_id": self.assistant_id,
+            "token_env": self.token_env,
+        }
 
     @classmethod
-    def load(cls, path: Path) -> DevStack:
-        config = cls(**tomllib.loads(path.read_text())["dev"])
+    def load(cls, path: Path, environment: Environment = "dev") -> Stack:
+        if environment not in get_args(Environment):
+            raise ValueError("Choose local, dev or prod.")
+        profiles = tomllib.loads(path.read_text())
+        if environment not in profiles:
+            raise ValueError(
+                f"No [{environment}] profile in {path}; no other profile will be substituted."
+            )
+        config = cls(**profiles[environment], environment=environment)
+        schemes = ("http", "https") if environment == "local" else ("https",)
         for url in (config.ai_url, config.backend_url, config.ui_url):
             parts = urlsplit(url)
             if (
-                parts.scheme != "https"
+                parts.scheme not in schemes
                 or not parts.hostname
                 or parts.username
                 or parts.password
@@ -110,7 +133,7 @@ class DevStack:
                 or parts.fragment
             ):
                 raise ValueError(
-                    "Configure explicit HTTPS dev service URLs without credentials or query strings."
+                    f"Configure explicit {'HTTP(S)' if environment == 'local' else 'HTTPS'} {environment} service URLs without credentials or query strings."
                 )
         return config
 
@@ -142,7 +165,7 @@ def pending(state: ThreadState) -> dict[str, object]:
     return found
 
 
-async def check_stack(config: DevStack, bearer: str) -> dict[str, object]:
+async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
     """Readiness reads only. HTTP 200 alone does not establish AI readiness."""
     async with httpx.AsyncClient(timeout=30) as client:
         ai = await client.get(
@@ -162,16 +185,19 @@ async def check_stack(config: DevStack, bearer: str) -> dict[str, object]:
     ai_health, backend_health = ai.json(), backend.json()
     build = ai_health.get("build_study", {})
     if ai_health.get("status") != "healthy" or build.get("ready") is not True:
-        raise RuntimeError("Dev AI is not ready; inspect its /health/custom response.")
+        raise RuntimeError(
+            f"{config.environment} AI is not ready; inspect its /health/custom response."
+        )
     if build.get("backend_url", "").rstrip("/") != config.backend_url.rstrip("/"):
         raise RuntimeError(
-            "Dev AI reports a different Backend from AgentTesting's configured Backend."
+            f"{config.environment} AI reports a different Backend from AgentTesting's configured Backend."
         )
     if backend_health.get("status") not in ("ok", "healthy"):
-        raise RuntimeError("Dev Backend is not healthy.")
+        raise RuntimeError(f"{config.environment} Backend is not healthy.")
     return {
         "checked_at": now(),
-        "services": asdict(config),
+        "environment": config.environment,
+        "services": config.identity(),
         "ai": {
             "deployment": ai_health.get("deployment"),
             "reference_version": build.get("reference_version"),
@@ -187,12 +213,16 @@ async def check_stack(config: DevStack, bearer: str) -> dict[str, object]:
 
 
 class Conversation:
-    def __init__(self, folder: Path, config: DevStack, client: LangGraphClient):
+    def __init__(self, folder: Path, config: Stack, client: LangGraphClient):
         self.folder, self.config, self.client = folder, config, client
 
     def attempt(self) -> Attempt:
         record = cast(Attempt, json.loads((self.folder / "attempt.json").read_text()))
-        if record["services"] != asdict(self.config):
+        if record.get("environment", "dev") != self.config.environment:
+            raise ValueError(
+                f"This attempt belongs to {record.get('environment', 'dev')}; select that environment or use a new attempt name."
+            )
+        if record["services"] != self.config.identity():
             raise ValueError(
                 "This attempt belongs to a different stack. Keep its original configuration."
             )
@@ -203,13 +233,14 @@ class Conversation:
     ) -> Status:
         """Adopt an existing authorized UI/API thread without sending a message."""
         with writer(self.folder):
+            exists = (self.folder / "attempt.json").exists()
+            if exists:
+                if self.attempt()["thread_id"] != thread_id:
+                    raise ValueError("This attempt already belongs to another thread.")
             thread = await self.client.threads.get(thread_id)
             if thread["thread_id"] != thread_id:
                 raise RuntimeError("The server returned a different thread identity.")
-            if (self.folder / "attempt.json").exists():
-                if self.attempt()["thread_id"] != thread_id:
-                    raise ValueError("This attempt already belongs to another thread.")
-            else:
+            if not exists:
                 save(
                     self.folder / "attempt.json",
                     {
@@ -217,14 +248,16 @@ class Conversation:
                         "owner": owner,
                         "scenario": scenario,
                         "created_at": now(),
-                        "services": asdict(self.config),
+                        "services": self.config.identity(),
+                        "environment": self.config.environment,
                         "attached": True,
                     },
                 )
                 save(
                     self.folder / "attachment.json",
                     {
-                        "configured_stack": asdict(self.config),
+                        "configured_stack": self.config.identity(),
+                        "environment": self.config.environment,
                         "attached_at": now(),
                         "thread_created_at": thread.get("created_at"),
                         "scope": "Configured endpoints at attachment, not a health check or proof of the historical deployment.",
@@ -283,6 +316,7 @@ class Conversation:
             "thread_status": thread["status"],
             "pending": pending(state),
             "runs": runs,
+            "environment": self.config.environment,
         }
         save(self.folder / "status.json", result)
         return result
@@ -309,6 +343,8 @@ class Conversation:
             target = self.folder / "turns" / key
             request = {"message": message, "responses": responses}
             request_file, run_file = target / "request.json", target / "run.json"
+            if (self.folder / "attempt.json").exists():
+                self.attempt()  # Reject a profile change before any readiness/API call.
             if request_file.exists():
                 self.attempt()  # Cached receipts still belong to one exact stack.
                 saved_request = json.loads(request_file.read_text())
@@ -381,7 +417,8 @@ class Conversation:
                         "owner": owner,
                         "scenario": scenario,
                         "created_at": now(),
-                        "services": asdict(self.config),
+                        "services": self.config.identity(),
+                        "environment": self.config.environment,
                     },
                 )
             attempt = self.attempt()
@@ -422,6 +459,7 @@ class Conversation:
                     metadata={
                         "agent_testing_key": key,
                         "agent_testing_submission_id": submission_id,
+                        "agent_testing_environment": self.config.environment,
                     },
                     multitask_strategy="reject",
                     stream_mode=["values", "messages-tuple", "custom", "updates"],
@@ -637,6 +675,7 @@ class Conversation:
 
             (self.folder / "report.md").write_text(render_report(self.folder))
             return {
+                "environment": self.config.environment,
                 "status": status,
                 "capture_status": "complete" if complete else "partial",
                 "metrics": summary,
@@ -647,8 +686,8 @@ class Conversation:
 
 def index(root: Path) -> str:
     lines = [
-        "| Attempt | Owner | Scenario | Last observed state | Observed at | Review | Evidence |",
-        "|---|---|---|---|---|---|---|",
+        "| Attempt | Environment | Owner | Scenario | Last observed state | Observed at | Review | Evidence |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for path in sorted(root.glob("*/attempt.json")):
         attempt = json.loads(path.read_text())
@@ -670,6 +709,7 @@ def index(root: Path) -> str:
         )
         values = [
             path.parent.name,
+            attempt.get("environment", "dev"),
             attempt["owner"],
             attempt.get("scenario") or "—",
             state,
@@ -733,7 +773,7 @@ async def run(args: argparse.Namespace) -> object:
             finding=args.finding,
             evidence=args.evidence or [],
         )
-    config = DevStack.load(args.config)
+    config = Stack.load(args.config, args.env)
     bearer = config.bearer()
     if args.action == "check":
         return await check_stack(config, bearer)
@@ -780,7 +820,13 @@ async def run(args: argparse.Namespace) -> object:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=ROOT / "dev.toml")
+    parser.add_argument(
+        "--env",
+        choices=get_args(Environment),
+        default="dev",
+        help="Network target (default: dev); offline commands read saved attempts",
+    )
+    parser.add_argument("--config", type=Path, default=ROOT / "environments.toml")
     parser.add_argument("--artifacts", type=Path, default=ROOT / ".artifacts")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("check")
@@ -843,6 +889,7 @@ def main() -> None:
     if args.action == "pull" and isinstance(result, dict):
         details = result["metrics"]
         result = {
+            "environment": result["environment"],
             "capture_status": result["capture_status"],
             "evidence": result["evidence"],
             "report": str(args.artifacts / args.attempt / "report.md"),

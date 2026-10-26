@@ -1,6 +1,7 @@
 import asyncio
 import json
-from dataclasses import asdict
+from argparse import Namespace
+from dataclasses import replace
 from uuid import uuid4
 
 import httpx
@@ -8,9 +9,9 @@ import pytest
 from langgraph_sdk.client import LangGraphClient
 
 from tools import agent_testing as app
-from tools.evidence import render_transcript, summarize
+from tools.evidence import render_report, render_transcript, summarize
 
-CONFIG = app.DevStack(
+CONFIG = app.Stack(
     "https://ai.dev.example", "https://api.dev.example", "https://ui.dev.example"
 )
 STAMP = "2026-10-25T12:00:00+00:00"
@@ -84,19 +85,19 @@ def no_network(monkeypatch):
 @pytest.fixture
 def fake_health(monkeypatch):
     async def check(*args):
-        return {"checked_at": STAMP, "services": asdict(CONFIG)}
+        return {"checked_at": STAMP, "services": CONFIG.identity()}
 
     monkeypatch.setattr(app, "check_stack", check)
 
 
-def exercise(folder, server, action):
+def exercise(folder, server, action, *, config=CONFIG):
     async def run():
         async with httpx.AsyncClient(
-            base_url=CONFIG.ai_url,
+            base_url=config.ai_url,
             transport=httpx.MockTransport(server.handle),
             headers={"Authorization": "Bearer test-only"},
         ) as http:
-            return await action(app.Conversation(folder, CONFIG, LangGraphClient(http)))
+            return await action(app.Conversation(folder, config, LangGraphClient(http)))
 
     return asyncio.run(run())
 
@@ -573,7 +574,145 @@ def test_config_does_not_accept_credentials_in_url(tmp_path):
         '[dev]\nai_url="https://name:secret@ai.example"\nbackend_url="https://b.example"\nui_url="https://u.example"'
     )
     with pytest.raises(ValueError, match="credentials"):
-        app.DevStack.load(p)
+        app.Stack.load(p)
+
+
+def test_profiles_default_to_dev_and_require_an_explicit_existing_profile(tmp_path):
+    config = app.Stack.load(app.ROOT / "environments.toml")
+    assert config.environment == "dev"
+    assert config.backend_url == "https://api.dev.epoch.trade"
+    custom = tmp_path / "custom.toml"
+    custom.write_text(
+        '[local]\nai_url="http://127.0.0.1:12048"\nbackend_url="http://127.0.0.1:19048"\nui_url="http://localhost:3001"'
+    )
+    local = app.Stack.load(custom, "local")
+    assert local.backend_url == "http://127.0.0.1:19048"
+    with pytest.raises(ValueError, match="No \\[dev\\] profile"):
+        app.Stack.load(custom)
+    with pytest.raises(ValueError, match="Choose local, dev or prod"):
+        app.Stack.load(custom, "typo")
+
+
+@pytest.mark.parametrize("environment", ["dev", "prod"])
+def test_hosted_profiles_require_https(tmp_path, environment):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[{environment}]\nai_url="http://host.example"\nbackend_url="https://b.example"\nui_url="https://u.example"'
+    )
+    with pytest.raises(ValueError, match="HTTPS"):
+        app.Stack.load(config, environment)
+
+
+@pytest.mark.parametrize("environment", ["local", "dev", "prod"])
+def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment):
+    config_path = app.ROOT / "environments.toml"
+    config = app.Stack.load(config_path, environment)
+    requests = []
+    server = Server()
+    allowed = {
+        httpx.URL(url).netloc
+        for url in (config.ai_url, config.backend_url, config.ui_url)
+    }
+
+    def handle(request):
+        requests.append(request)
+        assert request.url.netloc in allowed
+        if request.url.path == "/health/custom":
+            assert request.url.netloc == httpx.URL(config.ai_url).netloc
+            return httpx.Response(
+                200,
+                json={
+                    "status": "healthy",
+                    "build_study": {"ready": True, "backend_url": config.backend_url},
+                },
+            )
+        if request.url.path == "/api/v1/health":
+            assert request.url.netloc == httpx.URL(config.backend_url).netloc
+            return httpx.Response(200, json={"status": "ok"})
+        if str(request.url).rstrip("/") == config.ui_url.rstrip("/"):
+            assert "authorization" not in request.headers
+            return httpx.Response(200, text="UI")
+        assert request.url.netloc == httpx.URL(config.ai_url).netloc
+        assert request.headers["Authorization"] == "Bearer test-only"
+        return server.handle(request)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        app.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handle), **kw),
+    )
+    monkeypatch.setenv("EPOCH_TOKEN", "test-only")
+    args = Namespace(
+        action="ask",
+        env=environment,
+        config=config_path,
+        artifacts=tmp_path,
+        attempt="case",
+        key="opening",
+        message="Research question",
+        owner="researcher",
+        scenario=None,
+    )
+    result = asyncio.run(app.run(args))
+    assert result["metadata"]["agent_testing_environment"] == environment
+    record = json.loads((tmp_path / "case/attempt.json").read_text())
+    assert record["environment"] == environment
+    assert record["services"] == config.identity()
+    assert {request.url.netloc for request in requests} == allowed
+    assert f"| {environment} |" in app.index(tmp_path)
+    assert f"Environment: {environment}." in render_report(tmp_path / "case")
+
+
+@pytest.mark.parametrize("action", ["status", "cached", "new_turn", "attach"])
+def test_profile_switch_is_rejected_before_any_network_call(
+    tmp_path, fake_health, monkeypatch, action
+):
+    server = Server()
+    first = exercise(tmp_path, server, ask)
+
+    def forbidden(request):
+        raise AssertionError("Wrong-profile network request")
+
+    async def no_readiness(*args):
+        raise AssertionError("Wrong-profile readiness request")
+
+    server.handle = forbidden
+    monkeypatch.setattr(app, "check_stack", no_readiness)
+    changed = replace(
+        CONFIG, environment="prod"
+    )  # even identical URLs must not silently relabel an attempt
+    actions = {
+        "status": lambda c: c.status(),
+        "cached": ask,
+        "new_turn": lambda c: ask(c, "next"),
+        "attach": lambda c: c.attach(
+            first["thread_id"], owner="researcher", scenario=None
+        ),
+    }
+    with pytest.raises(ValueError, match="belongs to dev"):
+        exercise(tmp_path, server, actions[action], config=changed)
+
+
+def test_existing_dev_receipts_remain_readable(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, ask)
+    path = tmp_path / "attempt.json"
+    record = json.loads(path.read_text())
+    record.pop("environment")
+    app.save(path, record)
+    assert exercise(tmp_path, server, lambda c: c.status())["environment"] == "dev"
+
+
+def test_command_line_default_is_dev(monkeypatch, capsys):
+    async def inspect(args):
+        return {"environment": args.env}
+
+    monkeypatch.setattr(app, "run", inspect)
+    monkeypatch.setenv("EPOCH_ENV", "prod")
+    monkeypatch.setattr("sys.argv", ["agent_testing", "check"])
+    app.main()
+    assert json.loads(capsys.readouterr().out)["environment"] == "dev"
 
 
 def test_transcript_excludes_non_public_reasoning_blocks():

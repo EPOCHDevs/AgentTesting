@@ -695,8 +695,16 @@ def render_report(folder: Path) -> str:
     summary = summarize(folder)
     capture = _sources(folder)
     sources = _mapping(capture.get("sources"))
+    attempt_path = folder / "attempt.json"
+    environment = (
+        json.loads(attempt_path.read_text()).get("environment", "dev")
+        if attempt_path.exists()
+        else "not recorded"
+    )
     lines = [
         "# Conversation evidence",
+        "",
+        f"Environment: {_cell(environment)}.",
         "",
         f"Latest collection: {_cell(_timestamp(capture.get('collected_at')))}.",
         "",
