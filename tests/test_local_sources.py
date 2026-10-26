@@ -112,8 +112,25 @@ def test_remote_changes_are_checked_without_a_cached_fetch(projects):
         local_stack.verify_primary_checkouts()
 
 
-def test_local_only_commits_are_rejected(projects):
-    git(projects / "EpochAI", "commit", "--allow-empty", "-m", "not pushed")
+def test_clean_local_commits_can_be_tested_before_pushing(projects):
+    source = projects / "EpochAI"
+    remote = git(source, "rev-parse", "origin/dev")
+    git(source, "commit", "--allow-empty", "-m", "not pushed")
+    record = local_stack.verify_primary_checkouts()["EpochAI"]
+    assert record["commit"] == git(source, "rev-parse", "HEAD")
+    assert record["origin_commit"] == remote
+    assert record["commit"] != remote
+
+
+@pytest.mark.parametrize("diverged", [False, True])
+def test_behind_or_diverged_local_commits_are_rejected(projects, diverged):
+    source = projects / "EpochAI"
+    remote = git(source, "rev-parse", "HEAD")
+    git(source, "commit", "--allow-empty", "-m", "remote work")
+    git(source, "push", "origin", "dev")
+    git(source, "reset", "--hard", remote)
+    if diverged:
+        git(source, "commit", "--allow-empty", "-m", "different local work")
     with pytest.raises(ValueError, match="not synchronized"):
         local_stack.verify_primary_checkouts()
 

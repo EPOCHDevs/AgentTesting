@@ -152,10 +152,17 @@ def verify_primary_checkouts() -> dict[str, dict[str, str]]:
             "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{expected}"
         ).split()[0]
         if commit != remote:
-            raise ValueError(
-                f"{project} is not synchronized with origin/{expected}. Update that checkout first."
-            )
-        records[project] = {"path": str(directory), "branch": branch, "commit": commit}
+            try:
+                ancestor = git("merge-base", commit, remote)
+            except ValueError:
+                ancestor = None
+            if ancestor != remote:
+                raise ValueError(
+                    f"{project} is not synchronized with origin/{expected}. "
+                    "Fetch and reconcile that checkout first; remote ancestry must be verified."
+                )
+        records[project] = {"path": str(directory), "branch": branch,
+                            "commit": commit, "origin_commit": remote}
     return records
 
 

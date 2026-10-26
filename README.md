@@ -68,7 +68,9 @@ The launcher uses the primary repositories beside AgentTesting:
 
 Before login or startup it checks those branches, rejects linked worktrees and
 uncommitted tracked changes, and compares each checkout with its current remote
-branch. It prints and records the source commits. It never switches or pulls
+branch. Clean local commits ahead of that branch are allowed for testing before
+push; behind, diverged or unverifiable checkouts are rejected. It prints the local
+commits and records both local and remote revisions. It never switches or pulls
 repositories automatically. Worktree/path overrides are not enabled.
 
 Use the primary Backend's existing `build/bin/epoch_stratifyx_server`, the
