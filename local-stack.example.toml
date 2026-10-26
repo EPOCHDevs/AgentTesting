@@ -5,3 +5,5 @@
 # Worktree/path overrides are not enabled.
 # Directory containing Node 24+, when it is not already on PATH:
 # node_bin = "/path/to/node/bin"
+# Optional native Rates/Calendar data preparation (requires Calendar-enabled Backend):
+# market_pages = true

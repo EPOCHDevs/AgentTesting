@@ -9,6 +9,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -38,7 +39,7 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
         "ai_dir": PROJECT_ROOT / "EpochAI",
         "ui_dir": PROJECT_ROOT / "EpochClientPortal",
     }
-    unknown = set(config) - set(paths) - {"node_bin"}
+    unknown = set(config) - set(paths) - {"node_bin", "market_pages"}
     if unknown:
         raise ValueError(
             f"Unknown local launcher settings: {', '.join(sorted(unknown))}"
@@ -60,6 +61,46 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
                 f"{key} must not be redirected by a symlink; use the fixed primary project path."
             )
     return config, resolved
+
+
+def configure_market_pages(binary: Path, enabled: bool | None) -> dict[str, str]:
+    """Apply an explicit local Markets choice to the generated runtime config."""
+    if enabled is None:
+        return {}
+    if not isinstance(enabled, bool):
+        raise ValueError("market_pages must be true or false.")
+    path = binary.parent / "config.json"
+    document = json.loads(path.read_text())
+    plugins = [
+        plugin
+        for plugin in document.get("plugins", [])
+        if plugin.get("name") == "epoch_stratifyx::server::MiPageRuntimeService"
+    ]
+    if len(plugins) != 1:
+        raise ValueError(
+            "The primary Backend runtime must have exactly one MiPageRuntimeService."
+        )
+    options = plugins[0].setdefault("config", {})
+    if not isinstance(options, dict):
+        raise ValueError("The Backend MI configuration must be an object.")
+    calendar = options.setdefault("calendar", {})
+    if not isinstance(calendar, dict):
+        raise ValueError("The Backend Calendar configuration must be an object.")
+    calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(document, stream, indent=2)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return {
+        "EPOCH_MI_RATES_PAGE": "1" if enabled else "0",
+        "EPOCH_MI_RATES_DAILY": "1" if enabled else "0",
+        "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
+        "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": "1" if enabled else "0",
+    }
 
 
 def verify_primary_checkouts() -> dict[str, dict[str, str]]:
@@ -237,6 +278,7 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "EPOCH_JOB_STAGING_DIR": str(private_dir(state / "backend/staging")),
         "EPOCH_ENDPOINT_CACHE_DIR": str(private_dir(state / "backend/cache")),
         "EPOCH_COMPILER_METADATA_DIR": str(binary.parent / "compiler_metadata"),
+        **configure_market_pages(binary, config.get("market_pages")),
     }
 
     # LangGraph loads its config env after process env. Supply local overrides
