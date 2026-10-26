@@ -206,12 +206,21 @@ async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
             config.backend_url.rstrip("/") + "/api/v1/health",
             headers={"Authorization": bearer},
         )
+        commentary = await client.get(
+            config.ai_url.rstrip("/") + "/api/v1/execution-extensions/commentary-policy",
+            headers={"Authorization": bearer},
+        )
         # UI redirects to its login page before authentication. This proves
         # reachability, not a logged-in browser session or rendering parity.
         ui = await client.get(config.ui_url, follow_redirects=True)
     ai.raise_for_status()
     backend.raise_for_status()
     ui.raise_for_status()
+    if commentary.status_code != 200:
+        raise RuntimeError(
+            f"{config.environment} AI commentary policy is not ready "
+            f"(HTTP {commentary.status_code}); inspect its deployment configuration."
+        )
     ai_health, backend_health = ai.json(), backend.json()
     build = ai_health.get("build_study", {})
     if ai_health.get("status") != "healthy" or build.get("ready") is not True:

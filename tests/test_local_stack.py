@@ -32,12 +32,17 @@ def test_occupied_port_is_not_reused():
             local_stack.check_ports([sock.getsockname()[1]])
 
 
-def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
+@pytest.mark.parametrize("operator_revision", [None, "", "  ", "operator-deployment-7"])
+def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision):
     ai, ui, backend = [
         tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend")
     ]
     monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(local_stack, "verify_primary_checkouts", lambda: {})
+    ai_commit = "a" * 40
+    monkeypatch.setattr(
+        local_stack, "verify_primary_checkouts",
+        lambda: {"EpochAI": {"commit": ai_commit, "branch": "dev", "path": str(ai)}},
+    )
     for file in (
         backend / "build/bin/epoch_stratifyx_server",
         ai / ".venv/bin/langgraph",
@@ -52,6 +57,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
     )
     (ai / ".env").write_text(
         "EPOCH_CAMPAIGN_SERVER=https://wrong.example\nMODEL_KEY=private\n"
+        + (f'EPOCH_COMMENTARY_DEPLOYMENT_REVISION="{operator_revision}"\n'
+           if operator_revision is not None else "")
     )
     graph = {
         "dependencies": [".", "./packages/local"],
@@ -82,6 +89,11 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch):
     assert portal[3]["VITE_API_BASE_URL"] == stack.backend_url
     assert portal[3]["VITE_LANGGRAPH_API_URL"] == stack.ai_url
     generated = json.loads((state / "ai/langgraph.json").read_text())
+    revision = (operator_revision or "").strip() or "local-" + ai_commit
+    assert generated["env"]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
+    assert _agent[3]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
+    receipt = json.loads((state / "source-checkouts.json").read_text())
+    assert receipt["EpochAI"]["commentary_deployment_revision"] == revision
     assert generated["env"]["EPOCH_CAMPAIGN_SERVER"] == stack.backend_url
     assert generated["graphs"]["epoch-ai"]["path"] == str(ai / "agent.py") + ":agent"
     assert generated["store"]["index"]["embed"] == str(ai / "embeddings.py") + ":embed"
