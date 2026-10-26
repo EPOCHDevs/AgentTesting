@@ -56,6 +56,40 @@ profile is rejected before network access. Existing dev attempts remain readable
 The global index shows all recorded environments, and offline reports identify
 the environment stored with the attempt.
 
+## Start locally
+
+Use the existing Backend build, EpochAI virtual environment and installed UI
+dependencies (Node 24+ with Corepack and the UI's pinned pnpm installed). Select
+their paths once:
+
+```bash
+cp local-stack.example.toml local-stack.toml
+# Edit local-stack.toml to point at your checkouts and Backend executable.
+.venv/bin/python -m tools.local_stack
+```
+
+The launcher asks for your Epoch email/password on first use, starts Backend →
+AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
+sign in with the same account. The CLI and browser maintain separate sessions.
+Ctrl+C stops only the services started by this command. An occupied port or a
+failed service stops startup; the launcher never substitutes a hosted service.
+
+The password is not saved. Refreshable local CLI tokens are stored with private
+permissions in `~/.config/epoch-agent-testing/local-login.json`; use `--login` to
+change the account, or delete that file to forget it. `--env local` test commands
+use this login automatically unless `EPOCH_TOKEN` is explicitly set. Dev/prod
+still require their configured token variable.
+
+Service logs, AI state and Backend study records stay under
+`.artifacts/local-stack/`. The generated AI configuration can contain service
+keys and is private; do not publish this directory. Product configuration files
+are left unchanged. Backend listener addresses still follow its existing
+`config.json`. The launcher does not build, install dependencies, submit research,
+or deploy anything. To change ports, pass `--environments environments.local.toml`
+and use that same file with the conversation CLI.
+
+## Run a conversation
+
 The runner checks AI readiness and its
 reported Backend address before sending work. It records the reported server
 versions for each submission. Selecting a stack does not deploy a product branch.

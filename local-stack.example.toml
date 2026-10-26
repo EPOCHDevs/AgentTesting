@@ -1,0 +1,8 @@
+# Copy to local-stack.toml (ignored). Paths are relative to this file.
+# Use existing product checkouts, installed dependencies and a built Backend.
+backend_binary = "../EpochBackend/build-dev/bin/epoch_stratifyx_server"
+backend_env = "../EpochBackend/services/stratifyx/.env.local"
+ai_dir = "../EpochAI"
+ui_dir = "../EpochClientPortal"
+# Optional: directory containing Node 24+, when it is not already on PATH.
+# node_bin = "/path/to/node/bin"
