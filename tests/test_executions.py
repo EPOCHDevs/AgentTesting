@@ -305,6 +305,28 @@ def test_malformed_record_saves_only_safe_error_metadata(tmp_path):
     }
 
 
+def test_execution_redacts_only_artifact_signing_query_not_business_fields(tmp_path):
+    backend = Backend(status="running")
+    normal = backend.handle
+    evidence = {"token": 23, "authorization": "purchase authorization amount",
+                "signed_query": "business field", "net_cash": None}
+
+    def handle(request):
+        response = normal(request)
+        if request.url.path.endswith("/exact-run"):
+            value = response.json()
+            value["parameters"] = evidence
+            return httpx.Response(200, json=value)
+        return response
+
+    backend.handle = handle
+    result = collect(tmp_path, backend)["executions"][0]
+    saved = json.loads((tmp_path / result["directory"] / "execution.json").read_text())
+    assert saved["artifact_source"]["signed_query"] == "[REDACTED]"
+    assert saved["parameters"] == evidence
+    assert saved["id"] == "exact-run"
+
+
 def test_log_read_failure_preserves_received_bytes_without_exception_credentials(
     tmp_path,
 ):

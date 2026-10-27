@@ -100,6 +100,32 @@ def test_full_tree_keeps_sdk_cost_time_errors_and_scopes_every_query(tmp_path):
     assert CONFIG.api_key not in (tmp_path / "traces/langsmith.json").read_text()
 
 
+def test_trace_redacts_only_promoted_auth_headers_and_preserves_sdk_payloads(tmp_path):
+    payload = {"token": 12, "authorization": "financial authorization measure",
+               "configurable": {"Authorization": "tool payload, not runtime configuration"}}
+    root = run(
+        extra={"metadata": {
+            "thread_id": THREAD, "source_id": "source", "model_choice": "selected",
+            "authorization": "Bearer secret-lowercase", "Authorization": "Bearer secret-header",
+            "x-refresh-token": "secret-renewal-lowercase", "X-Refresh-Token": "secret-renewal-header",
+        }},
+        inputs=payload, outputs={"rows": [payload]}, total_tokens=17,
+        total_cost=Decimal("0.000123456789"),
+    )
+    before = root.model_dump(mode="json")
+    result = collect(tmp_path, THREAD, config=CONFIG,
+                     client=Client([root], {str(root.trace_id): [root]}))
+    saved = result["runs"][0].model_dump(mode="json")
+    expected = root.model_dump(mode="json")
+    for field in ("authorization", "Authorization", "x-refresh-token", "X-Refresh-Token"):
+        expected["extra"]["metadata"][field] = "[REDACTED]"
+    assert saved == expected
+    assert root.model_dump(mode="json") == before
+    for path in [tmp_path / "traces/langsmith.json", *tmp_path.glob("traces/captures/*.json")]:
+        assert json.loads(path.read_text())["runs"] == [expected]
+        assert "secret-" not in path.read_text()
+
+
 def test_rejects_wrong_thread_project_trace_and_disconnected_spans(tmp_path):
     root = run()
     wrong_thread = run(thread="unrelated")

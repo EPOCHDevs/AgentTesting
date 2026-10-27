@@ -184,6 +184,14 @@ can add a known execution receipt. Each requested source is attempted separately
 Missing, expired or incomplete evidence is reported; a partial pull exits with
 code 2 after saving what it obtained.
 
+Run evidence replaces credentials in the server-owned authenticated-user,
+runtime-context and legacy configurable-header fields with `[REDACTED]`.
+LangSmith captures likewise redact legacy auth headers promoted into trace
+metadata. Message/tool payloads, financial fields, identities and usage remain
+unchanged. Backend execution records separately redact `artifact_source.signed_query`.
+This is targeted transport redaction, not a scan of arbitrary text. Older files
+are not rewritten in bulk; an already-running collector keeps its loaded code.
+
 `report.md` shows agent usage, observed errors, span timing and reported cost, plus
 Backend status, logs, configuration/HTTP/record events and native job timing where
 those were retained. Raw records stay beside the report for debugging. Historical

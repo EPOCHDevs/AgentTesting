@@ -113,6 +113,68 @@ async def ask(c, key="first", message="Compare cash generation"):
     )
 
 
+class AuthRunServer(Server):
+    """The server echoes auth config alongside the SDK's run envelope."""
+
+    def handle(self, request):
+        response = super().handle(request)
+        if "/runs" not in request.url.path:
+            return response
+        value = response.json()
+        for run in value if isinstance(value, list) else [value]:
+            if "run_id" in run:
+                run["kwargs"] = {
+                    "config": {"configurable": {"langgraph_auth_user": {
+                        "identity": "owner", "authorization": "Bearer secret-run-auth",
+                    }}},
+                    "input": {"token": 23, "authorization": "financial data"},
+                }
+        return httpx.Response(response.status_code, json=value)
+
+
+def test_all_run_evidence_boundaries_redact_server_auth(tmp_path, fake_health):
+    server = AuthRunServer()
+    first = exercise(tmp_path, server, ask)
+    def auth(row):
+        return row["kwargs"]["config"]["configurable"]["langgraph_auth_user"]
+    assert auth(first) == {"identity": "owner", "authorization": "[REDACTED]"}
+
+    # A cached receipt and history created by an older collector are sanitized
+    # when this owner next returns/archives them under its normal writer lock.
+    old = json.loads(json.dumps(first))
+    auth(old)["authorization"] = "Bearer secret-old-auth"
+    receipt_path = tmp_path / "turns/first/run.json"
+    app.save(receipt_path, old)
+    assert exercise(tmp_path, server, ask) == first
+    app.save(tmp_path / "runs.json", {
+        "captured_at": STAMP, "complete": True, "error_type": None, "runs": [old],
+    })
+    status = exercise(tmp_path, server, lambda c: c.status())
+    assert auth(status["runs"][0])["authorization"] == "[REDACTED]"
+    history = exercise(tmp_path, server, lambda c: c.all_runs())
+    assert auth(history["runs"][0])["authorization"] == "[REDACTED]"
+    exercise(tmp_path, server, lambda c: c.pull())  # includes refreshed turns/*/run.json
+    for path in [receipt_path, tmp_path / "status.json", tmp_path / "runs.json",
+                 *tmp_path.glob("run-captures/*.json")]:
+        value = json.loads(path.read_text())
+        for row in value["runs"] if "runs" in value else [value]:
+            assert auth(row) == {"identity": "owner", "authorization": "[REDACTED]"}
+            assert row["kwargs"]["input"] == {"token": 23, "authorization": "financial data"}
+        assert "secret-" not in path.read_text()
+    assert len(server.runs) == 1
+
+
+def test_lost_create_response_redacts_reconnected_run(tmp_path, fake_health):
+    server = AuthRunServer()
+    server.lose_response = True
+    with pytest.raises(httpx.ReadError):
+        exercise(tmp_path, server, ask)
+    restored = exercise(tmp_path, server, ask)
+    assert restored["kwargs"]["config"]["configurable"]["langgraph_auth_user"]["authorization"] == "[REDACTED]"
+    assert "secret-run-auth" not in (tmp_path / "turns/first/run.json").read_text()
+    assert len(server.runs) == 1
+
+
 def test_repeated_cell_does_not_submit_and_followup_keeps_thread(tmp_path, fake_health):
     server = Server()
     first = exercise(tmp_path, server, ask)

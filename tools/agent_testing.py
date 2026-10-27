@@ -29,6 +29,7 @@ from langgraph_sdk.client import LangGraphClient
 from langgraph_sdk.schema import Command, Run, ThreadState
 
 from tools.evidence import render_transcript, summarize
+from tools.evidence_redaction import redact_run
 
 ROOT = Path(__file__).resolve().parents[1]
 Environment = Literal["local", "dev", "prod"]
@@ -324,7 +325,7 @@ class Conversation:
                 new = [run for run in page if run["run_id"] not in found]
                 if page and not new:
                     raise RuntimeError("Run pagination did not advance.")
-                found.update((run["run_id"], run) for run in new)
+                found.update((run["run_id"], redact_run(run)) for run in new)
                 if len(page) < 100:
                     receipt["complete"] = True
                     break
@@ -338,9 +339,11 @@ class Conversation:
             receipt["runs"] = list(found.values())
             previous = self.folder / "runs.json"
             if previous.exists():
+                captured = cast(RunHistory, json.loads(previous.read_text()))
+                captured["runs"] = [redact_run(run) for run in captured["runs"]]
                 save(
                     self.folder / "run-captures" / f"{uuid4()}.json",
-                    json.loads(previous.read_text()),
+                    captured,
                 )
             save(self.folder / "run-captures" / f"{uuid4()}.json", receipt)
             save(previous, receipt)
@@ -358,7 +361,7 @@ class Conversation:
             "thread_id": attempt["thread_id"],
             "thread_status": thread["status"],
             "pending": pending(state),
-            "runs": runs,
+            "runs": [redact_run(run) for run in runs],
             "environment": self.config.environment,
         }
         save(self.folder / "status.json", result)
@@ -398,7 +401,9 @@ class Conversation:
                         "This turn key already names a different request. Choose a new key."
                     )
                 if run_file.exists():
-                    return cast(Run, json.loads(run_file.read_text()))
+                    captured = redact_run(cast(Run, json.loads(run_file.read_text())))
+                    save(run_file, captured)
+                    return captured
                 if (target / "rejected.json").exists():
                     raise RuntimeError(
                         "The server rejected this submission. Inspect rejected.json and use a new key after correcting the cause."
@@ -427,8 +432,9 @@ class Conversation:
                             raise RuntimeError(
                                 "Multiple matching runs need manual inspection."
                             )
-                        save(run_file, matches[0])
-                        return matches[0]
+                        captured = redact_run(matches[0])
+                        save(run_file, captured)
+                        return captured
                     if len(runs) < 100:
                         break
                     offset += len(runs)
@@ -533,8 +539,9 @@ class Conversation:
                         },
                     )
                 raise
-            save(run_file, result)
-            return result
+            captured = redact_run(result)
+            save(run_file, captured)
+            return captured
 
     async def pull(
         self,
@@ -610,7 +617,7 @@ class Conversation:
                     refreshed = await self.client.runs.get(
                         attempt["thread_id"], accepted["run_id"]
                     )
-                    save(path, refreshed)
+                    save(path, redact_run(refreshed))
                 sources["thread"] = {
                     "status": "available" if history["complete"] else "partial",
                     "run_count": len(runs),
