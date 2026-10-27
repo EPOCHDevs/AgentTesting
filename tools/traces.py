@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from tools.evidence_redaction import redact_trace_run
+
 if TYPE_CHECKING:
     from langsmith import Client
     from langsmith.schemas import Run
@@ -197,6 +199,7 @@ def collect(
         )
     try:
         snapshot = _collect(client, config, thread_id, expected_run_ids)
+        snapshot["runs"] = [redact_trace_run(run) for run in snapshot["runs"]]
         _save(folder, snapshot)
         return snapshot
     finally:
