@@ -1,5 +1,10 @@
 # Research situations
 
+Use the [workflow coverage programme](coverage/README.md) to choose release
+prerequisites and deeper cases. It maps current capabilities, meaningful workflow
+variants, edge cases and review evidence. The six briefs below are starting
+conversations; they are not the full platform acceptance checklist.
+
 Start with a person's work, not a list of Epoch features. These are fictional
 composite roles, not accounts of real clients or claims about market conditions.
 
@@ -26,6 +31,8 @@ Epoch explains the gap, asks for a decision, or proposes an alternative. A
 substitute must be explicit; it must not quietly become the original task.
 
 A separate reviewer checks the evidence and whether the research need was met.
-An honest limitation is useful evidence even when the need remains unmet. Record
-which capabilities were actually exercised afterward. Use roles, questions and
-markets to diversify assignments; do not force feature coverage into the dialogue.
+An honest limitation is useful evidence even when the need remains unmet; it
+does not pass a required positive workflow. Select planned coverage from the
+programme before a campaign, then record which capabilities and depth stages were
+actually exercised afterward. Use roles, questions and markets to diversify
+assignments; let follow-ups arise from the evidence and the person's decision.

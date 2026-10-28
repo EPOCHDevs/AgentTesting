@@ -7,7 +7,7 @@ conversations and reviewing the evidence behind their results.
 
 | Folder | Purpose |
 |---|---|
-| `scenarios/` | Realistic role briefs, opening questions and known exclusions |
+| `scenarios/` | Role briefs, opening questions, phased workflow coverage and known exclusions |
 | `campaigns/` | Assignments, coverage and attempt records |
 | `tools/` | Conversation and evidence helpers |
 | `notebooks/` | Review views and examples |
@@ -18,6 +18,8 @@ Choose a scenario → have a conversation → collect evidence → review → re
 
 Start with the [research situations](scenarios/README.md). The researcher reacts
 to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
+Plan campaign breadth and depth with the [workflow coverage programme](scenarios/coverage/README.md),
+including release prerequisites, meaningful variants and evidence requirements.
 Each attempt owns its records; a shared index can summarize them without competing
 writes. A completed conversation is not automatically a passing result.
 
