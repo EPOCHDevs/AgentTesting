@@ -6,7 +6,7 @@
   "other_revisions": {
     "EpochAI": "9c8342b7b399b3d28ee096a769018f2539ddbf81",
     "EpochClientPortal": "0c56b9bc5f3ccb8a2c7d4753198abda72c96249f",
-    "AgentTesting_base": "0c8732edc267f9e523e34b7433c47743f1f611fe"
+    "AgentTesting_base": "ba7a860d160e9aa98634b5972f6d4ad03c2ab365"
   },
   "collection_rule": "Tracked core/metadata/macros/*.json and transforms/packages/*/{metadata/*.json,skills/*.md} at backend_revision. Exclude package metadata index.json. Every discovered macro/package group has case ownership; this does not assert method/option acceptance.",
   "summary": {

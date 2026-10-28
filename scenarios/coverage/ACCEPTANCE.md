@@ -6,6 +6,14 @@ This is the reviewer contract. Give the researcher the decision and context;
 keep numerical answer keys and internal checks separate. Follow actual answers
 instead of requiring a memorized sequence of prompts.
 
+Follow the repository's [audit scope](../../AGENTS.md): the selected vendor's
+data and declared basis are authoritative. Independent review checks Epoch's
+source selection, bindings, units, transformations, calculations and delivered
+results against those inputs. It does not re-audit vendor values through external
+filings, invented accounting identities or inferred quarter/YTD conversions.
+Vendor differences alone are not platform failures. Preserve original attempts;
+a revised interpretation is a new review, not a replacement artifact or fresh run.
+
 ## What passes
 
 A positive workflow passes only when the stated research need is met, required
@@ -87,7 +95,9 @@ behaviour. A P1 fixture crossing DST must meet the DST checks now.
   count reconciliation and monotonicity when only narrowing.
 - **Fundamentals:** trace reported metrics and constructed ratios to compatible
   dated source rows. Check currency/share basis, capex signs, TTM periods and
-  denominator policy. Never tune expected values to match the answer.
+  denominator policy using the vendor's declared definitions. Different source
+  cash scopes do not establish a reconciliation failure. Never tune expected
+  values to match the answer or invent a conversion to repair vendor values.
 - **Time joins:** inspect before/at/after disclosure, release, membership and
   session boundaries. Appending later data must not revise supposedly causal
   earlier output.

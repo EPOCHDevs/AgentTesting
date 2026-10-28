@@ -12,7 +12,7 @@ deployed availability and end-to-end acceptance are separate facts.
 | EpochBackend | `main` · `afe645191293f3345ce6bd9d19dec338460abee6` |
 | EpochAI | `dev` · `9c8342b7b399b3d28ee096a769018f2539ddbf81` |
 | EpochClientPortal | `dev` · `0c56b9bc5f3ccb8a2c7d4753198abda72c96249f` |
-| AgentTesting | `dev` base · `0c8732edc267f9e523e34b7433c47743f1f611fe` |
+| AgentTesting | `dev` base · `ba7a860d160e9aa98634b5972f6d4ad03c2ab365` |
 
 The revisions above define the evidence snapshot. The review used tracked
 source files; local artifacts and running services were not acceptance evidence.

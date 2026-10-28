@@ -35,6 +35,10 @@ and a suitable brief, let the researcher respond to the actual answers, and
 record what was exercised. The review contract must not become a script pasted
 into every conversation. No fixed turn count is required.
 
+The repository's [audit scope](../../AGENTS.md) governs every case: vendor data
+and its declared basis are authoritative; audit Epoch's use and calculation of
+those inputs. Preserve original attempts and record reassessments as new reviews.
+
 ## What depth means
 
 | Depth | Required evidence | Example |

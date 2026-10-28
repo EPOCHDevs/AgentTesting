@@ -20,7 +20,8 @@ Start with the [research situations](scenarios/README.md). The researcher reacts
 to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
 Plan campaign breadth and depth with the [workflow coverage programme](scenarios/coverage/README.md),
 including release prerequisites, meaningful variants and evidence requirements.
-Each attempt owns its records; a shared index can summarize them without competing
+Reviewers follow the [audit scope](AGENTS.md). Each attempt owns its records;
+a shared index can summarize them without competing
 writes. A completed conversation is not automatically a passing result.
 
 CLI, API and direct UI interaction are possible ways to drive a conversation.
