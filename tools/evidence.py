@@ -118,6 +118,7 @@ class TraceSpan(TypedDict):
     name: str | None
     run_type: str | None
     agent: str | None
+    model: str | None
     start_time: str | None
     end_time: str | None
     first_token_time: str | None
@@ -126,6 +127,9 @@ class TraceSpan(TypedDict):
     prompt_tokens: int | None
     completion_tokens: int | None
     total_tokens: int | None
+    cache_creation_tokens: int | None
+    cache_read_tokens: int | None
+    usage_complete: bool
     error_observed: bool
     error_preview: str | None
     evidence: str
@@ -141,6 +145,9 @@ class TraceSummary(TypedDict):
     observed_root_cost_usd: str | None
     missing_root_cost_ids: list[str]
     incomplete_root_ids: list[str]
+    missing_llm_cost_ids: list[str]
+    incomplete_llm_usage_ids: list[str]
+    cost_complete: bool
     cost_scope: str
     timing_scope: str
 
@@ -321,6 +328,13 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
         metadata = extra.get("metadata") if isinstance(extra, dict) else None
         metadata = metadata if isinstance(metadata, dict) else {}
         cost = _decimal(run.get("total_cost"))
+        prompt_details = _mapping(run.get("prompt_token_details"))
+        usage_complete = (
+            _count(run.get("prompt_tokens")) is not None
+            and _count(run.get("completion_tokens")) is not None
+            and end is not None
+            and run.get("error") is None
+        )
         spans.append(
             {
                 "id": run_id,
@@ -330,6 +344,8 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
                 "run_type": _name(run.get("run_type")),
                 "agent": _name(metadata.get("epoch_model_role"))
                 or _name(metadata.get("lc_agent_name")),
+                "model": _name(metadata.get("ls_model_name"))
+                or _name(metadata.get("model")),
                 "start_time": start,
                 "end_time": end,
                 "first_token_time": _timestamp(run.get("first_token_time")),
@@ -338,6 +354,9 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
                 "prompt_tokens": _count(run.get("prompt_tokens")),
                 "completion_tokens": _count(run.get("completion_tokens")),
                 "total_tokens": _count(run.get("total_tokens")),
+                "cache_creation_tokens": _count(prompt_details.get("cache_creation")),
+                "cache_read_tokens": _count(prompt_details.get("cache_read")),
+                "usage_complete": usage_complete,
                 "error_observed": run.get("error") is not None,
                 "error_preview": _error_preview(run.get("error")),
                 "evidence": f"traces/langsmith.json#runs/{run_id}",
@@ -348,11 +367,23 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
     status = _name(
         _mapping(_mapping(current.get("sources")).get("langsmith")).get("status")
     )
+    missing_llm_cost = [
+        row["id"]
+        for row in spans
+        if row["run_type"] == "llm" and row["recorded_cost_usd"] is None
+    ]
+    incomplete_llm_usage = [
+        row["id"]
+        for row in spans
+        if row["run_type"] == "llm" and not row["usage_complete"]
+    ]
     complete_cost = (
         bool(roots)
         and coverage.get("complete") is True
         and not missing_cost
         and not incomplete_roots
+        and not missing_llm_cost
+        and not incomplete_llm_usage
     )
     return {
         "source": data.get("source"),
@@ -366,6 +397,9 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
         else None,
         "missing_root_cost_ids": missing_cost,
         "incomplete_root_ids": incomplete_roots,
+        "missing_llm_cost_ids": missing_llm_cost,
+        "incomplete_llm_usage_ids": incomplete_llm_usage,
+        "cost_complete": complete_cost,
         "cost_scope": "LangSmith reported root total_cost only, excluding child totals; provider estimates, not billing receipts.",
         "timing_scope": "Recorded trace span elapsed time; overlapping span durations are not added or called model compute time.",
     }
@@ -819,6 +853,7 @@ def render_report(folder: Path) -> str:
                 "",
                 (
                     f"Snapshot coverage complete: {coverage.get('complete') is True}. "
+                    f"Cost accounting complete: {trace['cost_complete']}. "
                     f"{cost_label} (USD): {_cell(summary['cost_usd'])}. "
                     f"Saved known root cost (USD): {_cell(trace['observed_root_cost_usd'])}."
                 ),
@@ -832,6 +867,7 @@ def render_report(folder: Path) -> str:
                 (
                     f"Coverage gaps: {_cell(', '.join(str(item) for item in coverage.get('incomplete_reasons', [])) or 'none reported')}. "
                     f"Missing root costs: {len(trace['missing_root_cost_ids'])}; unfinished/invalid roots: {len(trace['incomplete_root_ids'])}."
+                    f" Unpriced LLM spans: {len(trace['missing_llm_cost_ids'])}; incomplete LLM usage spans: {len(trace['incomplete_llm_usage_ids'])}."
                 ),
                 "",
                 "| Root span | Start / end | Seconds | Reported USD | Error observed |",
@@ -869,12 +905,7 @@ def render_report(folder: Path) -> str:
                 for row in trace["spans"]
                 if row["run_type"] == "llm" and (row["agent"] or "(unknown)") == name
             ]
-            known = [
-                row
-                for row in rows
-                if row["prompt_tokens"] is not None
-                and row["completion_tokens"] is not None
-            ]
+            known = [row for row in rows if row["usage_complete"]]
             inp = sum(row["prompt_tokens"] or 0 for row in known) if known else None
             out = sum(row["completion_tokens"] or 0 for row in known) if known else None
             seconds = [

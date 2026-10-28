@@ -545,7 +545,95 @@ def test_trace_roles_and_agent_cost_ranges_come_from_recorded_fields_only(tmp_pa
     assert "| author | 3 | 60 / 15 | 0 | 12.0–12.0 | 0.10–0.25 (2/3) | 0 |" in report
     assert "inclusive span costs are never added" in report
     assert "0.35" not in report
-    assert summary["cost_usd"] == "1.25"
+    assert summary["cost_usd"] is None
+    assert summary["traces"]["observed_root_cost_usd"] == "1.25"
+    assert summary["traces"]["missing_llm_cost_ids"] == ["call-three", "supervisor"]
+    assert summary["traces"]["cost_complete"] is False
+
+
+def test_priced_roots_do_not_hide_unpriced_recovered_author_calls(tmp_path):
+    root = span("root", cost="0.7687310")
+    models = []
+    for i in range(6):
+        supervisor = span(
+            f"supervisor-{i}",
+            parent="root",
+            kind="llm",
+            cost="0.1596210" if i == 5 else "0.1",
+        )
+        supervisor["extra"] = {"metadata": {"epoch_model_role": "supervisor"}}
+        models.append(supervisor)
+    models.append(span("summary", parent="root", kind="llm", cost="0.10911"))
+    for i in range(7):
+        author = span(f"author-{i}", parent="root", kind="llm", cost=None)
+        author["extra"] = {
+            "metadata": {
+                "epoch_model_role": "study_author",
+                "ls_model_name": "openai.gpt-6-astra",
+            }
+        }
+        author["prompt_token_details"] = {"cache_creation": 10, "cache_read": 90}
+        if i == 0:
+            author.update(
+                error="StreamChunkTimeoutError",
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+        models.append(author)
+    trace_file(tmp_path, ["root"], [root, *models])
+    summary = summarize(tmp_path)
+    trace = summary["traces"]
+    assert trace is not None
+    assert summary["cost_usd"] is None
+    assert trace["cost_complete"] is False
+    assert trace["observed_root_cost_usd"] == "0.7687310"
+    assert trace["missing_root_cost_ids"] == []
+    assert trace["missing_llm_cost_ids"] == [f"author-{i}" for i in range(7)]
+    assert trace["incomplete_llm_usage_ids"] == ["author-0"]
+    author = next(row for row in trace["spans"] if row["id"] == "author-1")
+    assert author["model"] == "openai.gpt-6-astra"
+    assert author["cache_creation_tokens"] == 10
+    assert author["cache_read_tokens"] == 90
+    assert author["usage_complete"] is True
+    report = render_report(tmp_path)
+    assert "Cost accounting complete: False" in report
+    assert "Saved known root cost (USD): 0.7687310" in report
+    assert "Unpriced LLM spans: 7; incomplete LLM usage spans: 1" in report
+
+
+@pytest.mark.parametrize(
+    "cost,end,error,prompt",
+    [
+        (None, LAST, None, 20),
+        ("NaN", LAST, None, 20),
+        ("-1", LAST, None, 20),
+        ("0.05", None, None, 20),
+        ("0", LAST, "StreamChunkTimeoutError", 0),
+        ("0.05", LAST, None, None),
+    ],
+)
+def test_incomplete_llm_receipts_do_not_become_complete_root_costs(
+    tmp_path, cost, end, error, prompt
+):
+    model = span("model", parent="root", kind="llm", cost=cost, end=end)
+    model.update(error=error, prompt_tokens=prompt)
+    trace_file(tmp_path, ["root"], [span("root"), model])
+    summary = summarize(tmp_path)
+    assert summary["cost_usd"] is None
+    assert summary["traces"]["cost_complete"] is False
+
+
+def test_genuine_zero_llm_cost_and_zero_cache_tokens_remain_known(tmp_path):
+    model = span("model", parent="root", kind="llm", cost="0")
+    model["prompt_token_details"] = {"cache_creation": 0, "cache_read": 0}
+    trace_file(tmp_path, ["root"], [span("root", cost="0"), model])
+    summary = summarize(tmp_path)
+    assert summary["cost_usd"] == "0"
+    trace = summary["traces"]
+    assert trace is not None and trace["cost_complete"] is True
+    row = next(row for row in trace["spans"] if row["id"] == "model")
+    assert row["cache_creation_tokens"] == row["cache_read_tokens"] == 0
 
 
 def test_report_native_job_timing_and_bounded_error_previews_are_source_owned(tmp_path):
