@@ -18,7 +18,8 @@ Choose a scenario → have a conversation → collect evidence → review → re
 
 Start with the [research situations](scenarios/README.md). The researcher reacts
 to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
-Each attempt owns its records; a shared index can summarize them without competing
+Reviewers follow the [audit scope](AGENTS.md). Each attempt owns its records;
+a shared index can summarize them without competing
 writes. A completed conversation is not automatically a passing result.
 
 CLI, API and direct UI interaction are possible ways to drive a conversation.
