@@ -1,0 +1,109 @@
+{
+  "campaign_id": "eng2311-research-completion",
+  "purpose": "Ten diverse real research conversations: complete the research, retain valid recoveries, and review the delivered dashboards.",
+  "environment": "local",
+  "endpoint_profile": "Recorded at launch; use the reviewed real stack behind the external demo.",
+  "acceptance": {
+    "primary": "The requested supported research completes and its persisted results can be opened.",
+    "recovery": "Validation or tool errors are allowed when the agent recovers correctly. Record every attempt and recovery.",
+    "terminal_breakage": "A stuck, aborted or repeatedly failing workflow that cannot finish remains a failed scenario.",
+    "capability_boundary": "An honest unavailable-data or unsupported-capability boundary is recorded separately; it does not count as fulfilling the original research need.",
+    "dashboard": "Inspect loaded charts/tables, units and labels, meaningful briefings, layout, navigation and visible errors.",
+    "evidence": "Record thread/run/execution IDs, source revisions, timing, usage/cost where available, context size and repeated context, failures, recoveries and reviewer findings. Unknown metrics stay unknown."
+  },
+  "conversation_policy": "Use the opening question, then read the actual answer. Follow-ups follow the persona's research need; they are not a fixed script. Resolve ordinary clarifications from the stated context. Preserve scope changes explicitly. Do not execute trades or use scripted model output.",
+  "known_exclusions": [
+    "Options data or options-dependent strategies",
+    "Bond-focused data, research or strategies",
+    "Real-time prices and streaming-market workflows"
+  ],
+  "scenarios": [
+    {
+      "id": "equity-trend",
+      "role": "Systematic researcher reviewing a simple equity trend rule",
+      "opening": "Could a simple 50/200-day moving-average rule have made SPY easier to hold? Compare its return and risk with buy-and-hold over 2016–2025, starting with $100,000 and allowing 2 bps commission and 5 bps slippage. Hold SPY when the fast average is above the slow average and cash otherwise. Show the dashboard.",
+      "follow_up_intent": "Once the backtest completes, examine robustness with Monte Carlo and a small nearby-parameter search. Inspect what the simulations and held-out results actually establish.",
+      "context": "Daily historical bars, no borrowing or short positions. Accept an explicit conventional execution-timing choice. Keep the original run when exploring variants.",
+      "completion": "Backtest comparison, Monte Carlo and a small tuning result complete; each dashboard opens with its measured evidence."
+    },
+    {
+      "id": "cash-generation",
+      "role": "Family office analyst comparing durable cash generation",
+      "opening": "Compare Apple and Microsoft's cash generation over fiscal years 2016–2025. Show revenue, free cash flow and free cash flow as a share of revenue. Is the difference mainly business size or cash conversion? Build a research dashboard I can use in our discussion.",
+      "follow_up_intent": "Check whether the conclusion holds over recent years and whether fiscal-year differences affect the comparison.",
+      "context": "Use reported annual financials and identify the free-cash-flow definition. This is a business comparison, not a buy/sell recommendation.",
+      "completion": "Comparable annual financial evidence and a supported answer about scale versus conversion are delivered."
+    },
+    {
+      "id": "inflation-outlook",
+      "role": "Macro economist preparing a quarterly outlook",
+      "opening": "Where might US headline CPI inflation be six months from now? Build a transparent statistical forecast from the available monthly history, show its uncertainty and historical fit, and explain what the model can support for our next outlook.",
+      "follow_up_intent": "Inspect the inflation definition, forecast assumptions and whether recent observations or the training window materially change the outlook.",
+      "context": "Use a conventional headline CPI measure and make the units and forecast horizon explicit. A weak forecast is an acceptable research result if the workflow and evidence complete.",
+      "completion": "A saved forecast study completes with historical observations, forecast horizon and uncertainty clearly distinguished."
+    },
+    {
+      "id": "equity-diversification",
+      "role": "Family office analyst reviewing geographic concentration",
+      "opening": "Would adding a broad Japan equity fund meaningfully diversify a Nasdaq-100 allocation, or do they suffer together? Compare EWJ and QQQ in US dollars over 2016–2025, including their relationship through difficult periods, and show the evidence on a dashboard.",
+      "follow_up_intent": "If the standalone comparison is useful, inspect an illustrative equal-weight mix and whether results depend on the observation window.",
+      "context": "This is an initial research comparison. Identify the return basis and the currency exposure embodied in the listed funds.",
+      "completion": "Aligned return, relationship and downside evidence supports a clear diversification assessment."
+    },
+    {
+      "id": "euro-revenue",
+      "role": "Corporate treasury analyst at a US manufacturer with euro revenue",
+      "opening": "Is the US–eurozone interest-rate gap still a useful guide to EUR/USD, or has that relationship changed? Use historical data from 2015 onward and show how the relationship varies over time, with the rate definitions made clear.",
+      "follow_up_intent": "Explore lagged versus contemporaneous relationships and any periods where the usual pattern breaks down.",
+      "context": "A budgeting discussion, not a trade. Macro policy-rate research is allowed; direct bond pricing is outside this campaign.",
+      "completion": "The aligned rate/FX study completes and distinguishes association, changing regimes and unsupported causal claims."
+    },
+    {
+      "id": "industrial-resilience",
+      "role": "Equity analyst preparing an industrial-distribution watchlist",
+      "opening": "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which looks better able to withstand a slowdown in customer orders? Use their financial history and public disclosures about customers and inventory services, and show the evidence behind the comparison.",
+      "follow_up_intent": "Clarify which conclusions come from computed financials and which come from cited company disclosures; inspect changes over time.",
+      "context": "Public company disclosure research is part of this request. Do not invent customer mix or causal explanations when a source is unavailable.",
+      "completion": "The comparison completes with measured financial evidence and sourced qualitative claims or explicit material limits."
+    },
+    {
+      "id": "airline-fuel",
+      "role": "Airline planning analyst examining fuel-cost exposure",
+      "opening": "How closely have fuel-price changes lined up with Delta and United's operating margins since 2016? I want to understand whether the relationship is stable enough to use in planning. Build a dashboard with the fuel measure and financial periods clearly identified.",
+      "follow_up_intent": "Inspect lags, exceptional periods and whether a disclosed proxy changes the conclusion.",
+      "context": "Prefer a supported jet-fuel series. A different energy-price proxy must be explicit and accepted as a scope adjustment, never silently substituted.",
+      "completion": "A period-aligned fuel/margin study completes, with the chosen fuel measure and limits on causal interpretation visible."
+    },
+    {
+      "id": "retail-inventory",
+      "role": "Retail analyst studying inventory discipline",
+      "opening": "Compare Costco, Walmart and Target from 2018–2025. Where did inventory build up relative to sales, and did those periods coincide with gross-margin pressure? Show the trends and the most useful comparisons in a research dashboard.",
+      "follow_up_intent": "Check fiscal-period comparability and, if a particular change needs explanation, examine cited management commentary.",
+      "context": "Keep stock measures such as inventory distinct from period flows such as revenue. Use the vendor's declared financial basis.",
+      "completion": "The financial-period comparison and relationship analysis complete without invented accounting conversions."
+    },
+    {
+      "id": "metals-cycle",
+      "role": "Manufacturing planning analyst assessing a cycle indicator",
+      "opening": "Has the copper-to-gold ratio been a useful companion to US industrial production since 2010, or are there long periods when they tell different stories? Show the historical relationship and the periods of divergence, with the price units and transformations clear.",
+      "follow_up_intent": "Inspect whether the relationship depends on levels versus changes or on the chosen historical window.",
+      "context": "Historical commodity and macro research. The result can be a weak or unstable relationship; no causal claim is required.",
+      "completion": "The aligned commodity/macro study and a supported assessment of consistency or divergence complete."
+    },
+    {
+      "id": "growth-revisions",
+      "role": "Macro researcher revisiting the 2022 slowdown debate",
+      "opening": "Did US GDP and unemployment tell a different story about 2022 using the releases available at the time versus today's revised data? Build a dashboard that distinguishes observation periods, release dates and revision vintages, and explain what actually changed.",
+      "follow_up_intent": "Inspect the availability of genuine historical vintages and whether any conclusion depends on revisions or differing publication schedules.",
+      "context": "Use real vintage/release evidence where available. A latest-only series cannot silently stand in for what was known then.",
+      "completion": "The vintage comparison completes with correct temporal meaning, or an explicit capability boundary is recorded as unmet coverage."
+    }
+  ],
+  "evidence_protocol": [
+    "Before launch, record exact Backend/AI/UI revisions, endpoint readiness, provider/model settings, and available trace capture. Keep private credentials out of all reports.",
+    "Capture every turn stream from submission through completion or interruption. Keep stable submission keys, original requests, clarifications and failed/recovered attempts. Pull each finished attempt with --traces --executions; record missing or partial sources explicitly.",
+    "Write a separate context audit from captured model inputs: bytes and reported tokens per model call, resident context versus conversation/tool results, exact repeated blocks, and inputs that were missing or irrelevant to the failed decision. Report how repetition was measured; absent prompt capture is unknown, not zero. Use available thinking summaries as clues, not proof of cause.",
+    "Open every persisted research dashboard in the live UI. Retain its URL, execution ID, screenshots and reviewer observations about loaded exhibits, units, periods, table/chart layout, briefings, navigation and visible errors. A successful execution alone is not a dashboard review.",
+    "Finish a per-scenario review with outcome (complete, terminal failure, or capability gap), valid recoveries, server wall time separately from model/backend spans, token/cost scope, context findings and evidence links. Update the global index without overwriting earlier attempts."
+  ]
+}
