@@ -107,11 +107,17 @@ def configure_market_pages(
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+    flag = "1" if enabled else "0"
     return {
-        "EPOCH_MI_RATES_PAGE": "1" if enabled else "0",
-        "EPOCH_MI_RATES_DAILY": "1" if enabled else "0",
+        # Equities runs through the Rates producer; FX, Commodities and Crypto
+        # are separate programmes that are off unless enabled here.
+        "EPOCH_MI_RATES_PAGE": flag,
+        "EPOCH_MI_RATES_DAILY": flag,
+        "EPOCH_MI_FX_PAGE": flag,
+        "EPOCH_MI_COMMODITIES_PAGE": flag,
+        "EPOCH_MI_CRYPTO_PAGE": flag,
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
-        "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": "1" if enabled else "0",
+        "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": flag,
     }
 
 
