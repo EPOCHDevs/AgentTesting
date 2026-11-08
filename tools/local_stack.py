@@ -64,8 +64,10 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
 
 
 # Trading Economics is unavailable until its monthly quota returns (EpochBackend
-# ENG-2489). Its pages (Calendar, Rates, FX and Commodities) stay off locally, as in
-# every deployed environment (epoch-terraform #150), so a local stack never calls it.
+# ENG-2489). Every Markets page depends on it (Equities through its index series,
+# ENG-2499), so Calendar, Rates, FX, Commodities and Crypto stay off locally, as in
+# every deployed environment (epoch-terraform #150, #151). The primary Backend's
+# .env.local keeps EPOCH_MI_EQUITIES_STOCK_CORE=0 for the same reason.
 # Set False to restore them.
 TRADING_ECONOMICS_PAUSED = True
 
@@ -132,7 +134,7 @@ def configure_market_pages(
         "EPOCH_MI_RATES_DAILY": te_flag,
         "EPOCH_MI_FX_PAGE": te_flag,
         "EPOCH_MI_COMMODITIES_PAGE": te_flag,
-        "EPOCH_MI_CRYPTO_PAGE": flag,
+        "EPOCH_MI_CRYPTO_PAGE": te_flag,
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
         "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": flag,
     }

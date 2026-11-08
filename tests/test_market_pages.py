@@ -37,7 +37,7 @@ def test_explicit_market_choice_preserves_other_runtime_configuration(tmp_path):
     assert updated["plugins"][0] == original["plugins"][0]
     assert updated["plugins"][1]["config"] == {
         "poll_seconds": 30,
-        # Trading Economics is paused: its pages stay off even when Markets is on.
+        # Trading Economics is paused: every MI page stays off even when Markets is on.
         "calendar": {
             "enabled": False,
             "refresh_mode": "paused",
@@ -50,7 +50,7 @@ def test_explicit_market_choice_preserves_other_runtime_configuration(tmp_path):
         "EPOCH_MI_RATES_DAILY": "0",
         "EPOCH_MI_FX_PAGE": "0",
         "EPOCH_MI_COMMODITIES_PAGE": "0",
-        "EPOCH_MI_CRYPTO_PAGE": "1",
+        "EPOCH_MI_CRYPTO_PAGE": "0",
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
         "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": "1",
     }
