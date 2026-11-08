@@ -121,8 +121,20 @@ failed service stops startup; the launcher never substitutes a hosted service.
 The password is not saved. Refreshable local CLI tokens are stored with private
 permissions in `~/.config/epoch-agent-testing/local-login.json`; use `--login` to
 change the account, or delete that file to forget it. `--env local` test commands
-use this login automatically unless `EPOCH_TOKEN` is explicitly set. Dev/prod
-still require their configured token variable.
+use this login automatically unless `EPOCH_TOKEN` is explicitly set.
+
+A hosted stack whose Portal publishes `epoch-runtime-config.json` (QA today) has
+its own login:
+
+```bash
+.venv/bin/python -m tools.agent_testing --env qa login
+```
+
+It reads the sign-in pool from that Portal and refuses when the Portal names a
+different Backend, agent or assistant than `environments.toml`. Each login is
+cached per Portal host, so one stack's login never authenticates another. A stack
+without a published runtime config (dev and prod for now) needs its configured
+token variable.
 
 Service logs, AI state and Backend study records stay under
 `.artifacts/local-stack/`. The generated AI configuration can contain service
@@ -178,10 +190,11 @@ A conversation started in the UI can be attached without sending a message:
 .venv/bin/python -m tools.agent_testing report review-01
 ```
 
-For `--traces`, configure `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` and
-`LANGSMITH_API_KEY` in the environment; `LANGSMITH_WORKSPACE_ID` is optional.
-Choose the selected stack's tracing project explicitly. A profile switch does
-not guess or change LangSmith credentials. Each profile's `token_env` can name
+For `--traces`, configure `LANGSMITH_ENDPOINT` and `LANGSMITH_API_KEY` in the
+environment; `LANGSMITH_WORKSPACE_ID` is optional. A profile that names its
+`langsmith_project` (local and qa) reads that project; set `LANGSMITH_PROJECT`
+for the others. A `LANGSMITH_PROJECT` that contradicts the profile is refused.
+A profile switch does not guess or change LangSmith credentials. Each profile's `token_env` can name
 its own Epoch token variable when credentials differ. Never commit the keys.
 
 The pull collects the thread and full run list, LangSmith trace trees, and Backend
