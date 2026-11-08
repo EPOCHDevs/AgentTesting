@@ -289,15 +289,36 @@ def _error_preview(value: object) -> str | None:
     return first[:240] + suffix
 
 
+def _from_v2_run(run: dict) -> dict:
+    """Read a v2 run with the v1 meanings the summary uses."""
+    ancestors = run.get("parent_run_ids") or []
+    extra = dict(_mapping(run.get("extra")))
+    if isinstance(run.get("metadata"), dict) and not isinstance(extra.get("metadata"), dict):
+        extra["metadata"] = run["metadata"]
+    run_type = run.get("run_type")
+    return {
+        **run,
+        "parent_run_id": ancestors[-1] if ancestors else None,
+        "run_type": run_type.lower() if isinstance(run_type, str) else run_type,
+        "extra": extra,
+    }
+
+
 def _trace_summary(folder: Path) -> TraceSummary | None:
     """Preserve recorded spans; never sum parent and child inclusive costs."""
     path = folder / "traces/langsmith.json"
     if not path.exists():
         return None
     data = json.loads(path.read_text())
-    if data.get("schema_version") != 1:
+    version = data.get("schema_version")
+    if version not in (1, 2):
         raise ValueError("Unsupported saved LangSmith trace schema")
-    runs = {run["id"]: run for run in data.get("runs", [])}
+    runs = {
+        run["id"]: _from_v2_run(run) if version == 2 else run
+        for run in data.get("runs", [])
+    }
+    # v2 run costs cover only the run itself; the trace total is the root's cost.
+    totals = _mapping(data.get("trace_aggregates")) if version == 2 else {}
     roots = list(dict.fromkeys(data.get("root_run_ids", [])))
     spans: list[TraceSpan] = []
     known_cost = Decimal(0)
@@ -309,7 +330,11 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
             incomplete_roots.append(root_id)
             missing_cost.append(root_id)
             continue
-        cost = _decimal(root.get("total_cost"))
+        cost = _decimal(
+            _mapping(totals.get(str(root.get("trace_id")))).get("total_cost")
+            if version == 2
+            else root.get("total_cost")
+        )
         if cost is None:
             missing_cost.append(root_id)
         else:
@@ -400,7 +425,9 @@ def _trace_summary(folder: Path) -> TraceSummary | None:
         "missing_llm_cost_ids": missing_llm_cost,
         "incomplete_llm_usage_ids": incomplete_llm_usage,
         "cost_complete": complete_cost,
-        "cost_scope": "LangSmith reported root total_cost only, excluding child totals; provider estimates, not billing receipts.",
+        "cost_scope": "LangSmith trace aggregate total_cost per root; per-run costs cover each run's own usage; provider estimates, not billing receipts."
+        if version == 2
+        else "LangSmith reported root total_cost only, excluding child totals; provider estimates, not billing receipts.",
         "timing_scope": "Recorded trace span elapsed time; overlapping span durations are not added or called model compute time.",
     }
 

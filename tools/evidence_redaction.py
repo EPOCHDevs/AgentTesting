@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from langgraph_sdk.schema import Run
 
 if TYPE_CHECKING:
-    from langsmith.schemas import Run as TraceRun
+    from langsmith.types import Run as TraceRun
 
 REDACTED = "[REDACTED]"
 _LEGACY_HEADERS = ("authorization", "Authorization", "x-refresh-token", "X-Refresh-Token")
@@ -47,7 +47,11 @@ def redact_run(run: Run) -> Run:
 
 
 def redact_trace_run(run: TraceRun) -> TraceRun:
-    """Copy the trace SDK model; only legacy auth-header metadata is removed."""
+    """Copy the trace SDK model; only legacy auth-header metadata is removed.
+
+    v2 runs carry metadata at the top level as well as under extra."""
     extra = deepcopy(run.extra)
     _redact(_object(extra, "metadata"), _LEGACY_HEADERS)
-    return run.model_copy(update={"extra": extra})
+    metadata = deepcopy(run.metadata)
+    _redact(metadata if isinstance(metadata, dict) else None, _LEGACY_HEADERS)
+    return run.model_copy(update={"extra": extra, "metadata": metadata})
