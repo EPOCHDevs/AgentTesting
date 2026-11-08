@@ -1,10 +1,11 @@
-"""Private, refreshable Cognito login for local testing. Never stores passwords."""
+"""Private, refreshable Cognito login for test stacks. Never stores passwords."""
 
 import getpass
 import json
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import jwt
@@ -14,10 +15,26 @@ from pycognito import Cognito
 REGION = "us-west-1"
 POOL = "us-west-1_Fz1y1zKFq"
 CLIENT = "2m0ep0k9gksk00ml7qtkked0fk"
+LOCAL_LOGIN = "python -m tools.local_stack --login"
 
 
-def token_path() -> Path:
-    return Path.home() / ".config/epoch-agent-testing/local-login.json"
+@dataclass(frozen=True)
+class UserPool:
+    """A Cognito user pool and its public app client; neither is a secret."""
+
+    pool_id: str
+    client_id: str
+
+    @property
+    def region(self) -> str:
+        return self.pool_id.partition("_")[0]
+
+
+LOCAL = UserPool(POOL, CLIENT)
+
+
+def token_path(name: str = "local") -> Path:
+    return Path.home() / ".config/epoch-agent-testing" / f"{name}-login.json"
 
 
 def save_tokens(tokens: dict, path: Path) -> None:
@@ -32,12 +49,12 @@ def save_tokens(tokens: dict, path: Path) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def client(**kwargs) -> Cognito:
+def client(pool: UserPool = LOCAL, **kwargs) -> Cognito:
     # Cognito SRP/refresh uses the public app client, not workstation AWS keys.
     return Cognito(
-        POOL,
-        CLIENT,
-        user_pool_region=REGION,
+        pool.pool_id,
+        pool.client_id,
+        user_pool_region=pool.region,
         boto3_client_kwargs={"aws_access_key_id": "", "aws_secret_access_key": ""},
         botocore_config=Config(
             connect_timeout=10, read_timeout=20, retries={"max_attempts": 0}
@@ -46,24 +63,29 @@ def client(**kwargs) -> Cognito:
     )
 
 
-def snapshot(user: Cognito, email: str) -> dict:
+def snapshot(user: Cognito, email: str, pool: UserPool = LOCAL) -> dict:
     if not all((user.id_token, user.access_token, user.refresh_token)):
         raise ValueError(
             "Login requires an additional Cognito challenge; complete it in the UI."
         )
-    return {
+    tokens = {
         "email": email,
         "username": user.username,
         "id_token": user.id_token,
         "access_token": user.access_token,
         "refresh_token": user.refresh_token,
     }
+    if pool != LOCAL:  # Refresh must use the pool that issued the login.
+        tokens |= {"user_pool_id": pool.pool_id, "client_id": pool.client_id}
+    return tokens
 
 
-def cached_token(path: Path | None = None, email: str | None = None) -> str:
+def cached_token(
+    path: Path | None = None, email: str | None = None, login_command: str = LOCAL_LOGIN
+) -> str:
     path = path or token_path()
     if not path.exists():
-        raise ValueError("No local login. Run python -m tools.local_stack first.")
+        raise ValueError(f"No test login. Run {login_command} first.")
     try:
         tokens = json.loads(path.read_text())
         if email and tokens["email"].casefold() != email.casefold():
@@ -73,33 +95,41 @@ def cached_token(path: Path | None = None, email: str | None = None) -> str:
             "exp"
         ]
         if expiry < time.time() + 120:
+            pool = (
+                UserPool(tokens["user_pool_id"], tokens["client_id"])
+                if "user_pool_id" in tokens
+                else LOCAL
+            )
             user = client(
+                pool=pool,
                 **{
                     key: tokens[key]
                     for key in ("username", "id_token", "access_token", "refresh_token")
                 }
             )
             user.renew_access_token()
-            tokens = snapshot(user, tokens["email"])
+            tokens = snapshot(user, tokens["email"], pool)
             save_tokens(tokens, path)
         return tokens["id_token"]
     except PermissionError:
         raise ValueError(
-            "The cached local login belongs to another account; use --login."
+            f"The cached login belongs to another account; run {login_command} again."
         ) from None
     except Exception:  # SDK errors can contain credential-bearing request data.
         raise ValueError(
-            "Local login could not be refreshed. Run with --login again."
+            f"The test login could not be refreshed. Run {login_command} again."
         ) from None
 
 
-def login(email: str | None = None, path: Path | None = None) -> str:
+def login(
+    email: str | None = None, path: Path | None = None, pool: UserPool = LOCAL
+) -> str:
     email = email or input("Epoch email: ").strip()
     password = getpass.getpass("Epoch password: ")
     try:
-        user = client(username=email)
+        user = client(pool=pool, username=email)
         user.authenticate(password=password)
-        tokens = snapshot(user, email)
+        tokens = snapshot(user, email, pool)
         save_tokens(tokens, path or token_path())
     except Exception:  # Never echo the SDK request or password in an error.
         raise ValueError(
@@ -107,5 +137,5 @@ def login(email: str | None = None, path: Path | None = None) -> str:
         ) from None
     finally:
         password = ""
-    print(f"Local test login ready: {email}")
+    print(f"Test login ready: {email}")
     return tokens["id_token"]

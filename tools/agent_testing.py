@@ -1,4 +1,4 @@
-"""Conversation driver for an explicitly selected local, dev or prod stack.
+"""Conversation driver for an explicitly selected local, dev, qa or prod stack.
 
 Adapted from EpochAI's supervisor CLI: persistent threads, explicit interrupt
 replies and live capture. Product implementation imports and database access
@@ -28,6 +28,7 @@ import httpx
 from langgraph_sdk.client import LangGraphClient
 from langgraph_sdk.schema import Command, Run, ThreadState
 
+from tools import local_auth
 from tools.evidence import render_transcript, summarize
 from tools.evidence_redaction import redact_run
 from tools.traces import TraceWindow
@@ -174,19 +175,60 @@ class Stack:
                 )
         return config
 
+    def login_path(self) -> Path:
+        # Hosted logins are cached per Portal host, so one never reaches another stack.
+        if self.environment == "local":
+            return local_auth.token_path()
+        return local_auth.token_path(cast(str, urlsplit(self.ui_url).hostname))
+
+    def user_pool(self) -> local_auth.UserPool:
+        """The sign-in pool the selected Portal publishes; local's is fixed."""
+        if self.environment == "local":
+            return local_auth.LOCAL
+        try:
+            response = httpx.get(
+                self.ui_url.rstrip("/") + "/epoch-runtime-config.json", timeout=15
+            )
+            response.raise_for_status()
+            published = response.json()
+            auth = published["amplifyOutputs"]["auth"]
+            pool = local_auth.UserPool(auth["user_pool_id"], auth["user_pool_client_id"])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            raise ValueError(
+                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; set {self.token_env}."
+            ) from None
+        profile = {
+            "backendUrl": self.backend_url,
+            "agentUrl": self.ai_url,
+            "assistantId": self.assistant_id,
+        }
+        differs = [
+            key
+            for key, value in profile.items()
+            if str(published.get(key, "")).rstrip("/") != value.rstrip("/")
+        ]
+        if differs:
+            raise ValueError(
+                f"The {self.environment} Portal publishes a different {', '.join(differs)} than environments.toml; update the profile before signing in."
+            )
+        return pool
+
+    def login(self, email: str | None = None) -> None:
+        local_auth.login(email, self.login_path(), self.user_pool())
+
     def bearer(self) -> str:
         value = os.environ.get(self.token_env)
-        if (
-            not value
-            and self.environment == "local"
-            and self.token_env == "EPOCH_TOKEN"
-        ):
-            from tools.local_auth import cached_token
-
-            value = cached_token()
+        if not value and self.token_env == "EPOCH_TOKEN":
+            if self.environment == "local":
+                value = local_auth.cached_token()
+            elif self.login_path().exists():
+                value = local_auth.cached_token(
+                    self.login_path(),
+                    login_command=f"python -m tools.agent_testing --env {self.environment} login",
+                )
         if not value:
             raise ValueError(
-                f"Set {self.token_env} to your Epoch identity token; credentials are never stored in this repo."
+                f"Set {self.token_env} to your Epoch identity token, or run python -m tools.agent_testing --env {self.environment} login; credentials are never stored in this repo."
             )
         return "Bearer " + value
 
@@ -846,6 +888,9 @@ async def run(args: argparse.Namespace) -> object:
             evidence=args.evidence or [],
         )
     config = Stack.load(args.config, args.env)
+    if args.action == "login":
+        config.login(args.email)
+        return {"environment": config.environment, "login": str(config.login_path())}
     if args.action != "check":
         folder = args.artifacts / args.attempt
         if (folder / "attempt.json").exists():
@@ -906,6 +951,10 @@ def main() -> None:
     parser.add_argument("--artifacts", type=Path, default=ROOT / ".artifacts")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("check")
+    login = sub.add_parser(
+        "login", help="Sign in to the selected stack's Portal user pool"
+    )
+    login.add_argument("--email")
     sub.add_parser("index")
     for name in ("ask", "answer", "status", "pull", "attach", "report", "review"):
         command = sub.add_parser(name)

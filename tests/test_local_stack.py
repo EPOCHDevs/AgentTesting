@@ -104,7 +104,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         assert "private" not in " ".join(command)
 
 
-def test_local_cache_does_not_authenticate_hosted_profiles(monkeypatch):
+def test_local_cache_does_not_authenticate_hosted_profiles(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("EPOCH_TOKEN", raising=False)
     monkeypatch.setattr(local_auth, "cached_token", lambda: "local-token")
     assert (
@@ -115,6 +116,104 @@ def test_local_cache_does_not_authenticate_hosted_profiles(monkeypatch):
             Stack.load(Path("environments.toml"), env).bearer()
     monkeypatch.setenv("EPOCH_TOKEN", "explicit")
     assert Stack.load(Path("environments.toml"), "local").bearer() == "Bearer explicit"
+
+
+QA = Stack.load(Path("environments.toml"), "qa")
+
+
+def published(**changes):
+    config = {
+        "backendUrl": QA.backend_url,
+        "agentUrl": QA.ai_url,
+        "assistantId": QA.assistant_id,
+        "amplifyOutputs": {
+            "auth": {
+                "user_pool_id": "us-east-1_TestPool",
+                "user_pool_client_id": "test-client",
+            }
+        },
+    }
+    return config | changes
+
+
+def serve(monkeypatch, body):
+    def get(url, **_):
+        assert url == "https://app.qa.epoch.trade/epoch-runtime-config.json"
+        request = agent_testing.httpx.Request("GET", url)
+        if isinstance(body, str):
+            return agent_testing.httpx.Response(200, text=body, request=request)
+        return agent_testing.httpx.Response(200, json=body, request=request)
+
+    monkeypatch.setattr(agent_testing.httpx, "get", get)
+
+
+def test_hosted_login_uses_the_pool_its_portal_publishes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EPOCH_TOKEN", raising=False)
+    serve(monkeypatch, published())
+    values = tokens(9999999999)
+    pools = []
+
+    def client(pool, **_):
+        pools.append(pool)
+        user = SimpleNamespace(**{k: v for k, v in values.items() if k != "email"})
+        user.authenticate = lambda **_: None
+        return user
+
+    monkeypatch.setattr(local_auth, "client", client)
+    monkeypatch.setattr(local_auth.getpass, "getpass", lambda _: "private")
+    local_auth.save_tokens(tokens(9999999998), local_auth.token_path())
+    QA.login("test@example.com")
+    assert pools == [local_auth.UserPool("us-east-1_TestPool", "test-client")]
+    cache = tmp_path / ".config/epoch-agent-testing/app.qa.epoch.trade-login.json"
+    assert QA.login_path() == cache
+    assert json.loads(cache.read_text())["user_pool_id"] == "us-east-1_TestPool"
+    # Each stack reads only its own login.
+    assert QA.bearer() == "Bearer " + values["id_token"]
+    local = Stack.load(Path("environments.toml"), "local")
+    assert local.bearer() == "Bearer " + tokens(9999999998)["id_token"]
+    with pytest.raises(ValueError, match="Set EPOCH_TOKEN"):
+        Stack.load(Path("environments.toml"), "dev").bearer()
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("<!doctype html>", "publishes no runtime config"),
+        (published(backendUrl="https://api.other.example"), "different backendUrl"),
+        (published(agentUrl="https://agent.other.example"), "different agentUrl"),
+    ],
+)
+def test_login_refuses_an_unknown_or_mismatched_portal(
+    tmp_path, monkeypatch, body, message
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    serve(monkeypatch, body)
+    monkeypatch.setattr(local_auth, "client", lambda **_: pytest.fail("no sign-in"))
+    with pytest.raises(ValueError, match=message):
+        QA.login("test@example.com")
+    assert not QA.login_path().exists()
+
+
+def test_hosted_login_refreshes_with_the_pool_that_issued_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EPOCH_TOKEN", raising=False)
+    pool = local_auth.UserPool("us-east-1_TestPool", "test-client")
+    expired = tokens(1) | {"user_pool_id": pool.pool_id, "client_id": pool.client_id}
+    local_auth.save_tokens(expired, QA.login_path())
+    fresh = tokens(9999999999)
+    pools = []
+
+    def client(pool, **_):
+        pools.append(pool)
+        user = SimpleNamespace(**{k: v for k, v in fresh.items() if k != "email"})
+        user.renew_access_token = lambda: None
+        return user
+
+    monkeypatch.setattr(local_auth, "client", client)
+    assert QA.bearer() == "Bearer " + fresh["id_token"]
+    assert pools == [pool]
+    assert json.loads(QA.login_path().read_text())["user_pool_id"] == pool.pool_id
 
 
 def test_mismatched_attempt_is_rejected_before_auth_refresh(tmp_path, monkeypatch):
