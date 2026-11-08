@@ -651,11 +651,11 @@ def test_profiles_default_to_dev_and_require_an_explicit_existing_profile(tmp_pa
     assert local.backend_url == "http://127.0.0.1:19048"
     with pytest.raises(ValueError, match="No \\[dev\\] profile"):
         app.Stack.load(custom)
-    with pytest.raises(ValueError, match="Choose local, dev or prod"):
+    with pytest.raises(ValueError, match="Choose local, dev, qa or prod"):
         app.Stack.load(custom, "typo")
 
 
-@pytest.mark.parametrize("environment", ["dev", "prod"])
+@pytest.mark.parametrize("environment", ["dev", "qa", "prod"])
 def test_hosted_profiles_require_https(tmp_path, environment):
     config = tmp_path / "config.toml"
     config.write_text(
@@ -665,7 +665,7 @@ def test_hosted_profiles_require_https(tmp_path, environment):
         app.Stack.load(config, environment)
 
 
-@pytest.mark.parametrize("environment", ["local", "dev", "prod"])
+@pytest.mark.parametrize("environment", ["local", "dev", "qa", "prod"])
 def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment):
     config_path = app.ROOT / "environments.toml"
     config = app.Stack.load(config_path, environment)
@@ -892,3 +892,10 @@ def test_readiness_checks_service_identity_and_ui_has_no_token(
         "authorization"
         not in next(r for r in captured if r.url.host == "ui.dev.example").headers
     )
+
+
+def test_profiles_name_their_trace_project_only_when_verified():
+    path = app.ROOT / "environments.toml"
+    assert app.Stack.load(path, "local").langsmith_project == "epoch-ai-local"
+    assert app.Stack.load(path, "qa").langsmith_project == "epoch-ai-staging"
+    assert app.Stack.load(path, "dev").langsmith_project is None

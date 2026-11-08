@@ -110,7 +110,7 @@ def test_local_cache_does_not_authenticate_hosted_profiles(monkeypatch):
     assert (
         Stack.load(Path("environments.toml"), "local").bearer() == "Bearer local-token"
     )
-    for env in ("dev", "prod"):
+    for env in ("dev", "qa", "prod"):
         with pytest.raises(ValueError, match="Set EPOCH_TOKEN"):
             Stack.load(Path("environments.toml"), env).bearer()
     monkeypatch.setenv("EPOCH_TOKEN", "explicit")
