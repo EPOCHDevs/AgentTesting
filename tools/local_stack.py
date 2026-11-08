@@ -108,7 +108,15 @@ def configure_market_pages(
     finally:
         Path(temporary).unlink(missing_ok=True)
     flag = "1" if enabled else "0"
+    batch = (
+        # Every deployed environment uses 128 (epoch-terraform #146). The
+        # Backend default of 8 splits each Equities universe into ~800 batches.
+        {"EPOCH_EQUITIES_SOURCE_BATCH_MEMBERS": "128"}
+        if enabled
+        else {}
+    )
     return {
+        **batch,
         # Equities runs through the Rates producer; FX, Commodities and Crypto
         # are separate programmes that are off unless enabled here.
         "EPOCH_MI_RATES_PAGE": flag,

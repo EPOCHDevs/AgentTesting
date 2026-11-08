@@ -99,8 +99,9 @@ its hashes and provenance at startup; the launcher does not manufacture a genera
 from an unversioned asset file. This enables native source
 capture, page publication and automatic refresh using the configured vendors.
 It updates only the generated `build/bin/config.json` Calendar settings and
-supplies the Rates, FX, Commodities and Crypto settings to the process; source
-configuration stays unchanged.
+supplies the Rates, FX, Commodities and Crypto settings to the process, with the
+deployed environments' Equities source batch size (128); source configuration
+stays unchanged.
 Set `market_pages = false` to disable automatic page work. Omitting it leaves
 the existing runtime settings alone. Page preparation does not start LLM work;
 opening a Rates context can run its declared text model, and previously accepted
