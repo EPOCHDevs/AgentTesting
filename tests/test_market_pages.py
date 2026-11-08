@@ -44,15 +44,26 @@ def test_explicit_market_choice_preserves_other_runtime_configuration(tmp_path):
         },
     }
     assert env == {
+        "EPOCH_EQUITIES_SOURCE_BATCH_MEMBERS": "128",
         "EPOCH_MI_RATES_PAGE": "1",
         "EPOCH_MI_RATES_DAILY": "1",
+        "EPOCH_MI_FX_PAGE": "1",
+        "EPOCH_MI_COMMODITIES_PAGE": "1",
+        "EPOCH_MI_CRYPTO_PAGE": "1",
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
         "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": "1",
     }
     env = configure_market_pages(tmp_path / "server", False)
-    assert (
-        env["EPOCH_MI_RATES_PAGE"] == env["EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED"] == "0"
+    disabled = (
+        "EPOCH_MI_RATES_PAGE",
+        "EPOCH_MI_RATES_DAILY",
+        "EPOCH_MI_FX_PAGE",
+        "EPOCH_MI_COMMODITIES_PAGE",
+        "EPOCH_MI_CRYPTO_PAGE",
+        "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED",
     )
+    assert {key: env[key] for key in disabled} == dict.fromkeys(disabled, "0")
+    assert "EPOCH_EQUITIES_SOURCE_BATCH_MEMBERS" not in env
     assert json.loads(path.read_text())["plugins"][1]["config"]["calendar"] == {
         "enabled": False,
         "refresh_mode": "paused",
