@@ -15,10 +15,10 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast, get_args
 from urllib.parse import quote, urlsplit
@@ -30,6 +30,7 @@ from langgraph_sdk.schema import Command, Run, ThreadState
 
 from tools.evidence import render_transcript, summarize
 from tools.evidence_redaction import redact_run
+from tools.traces import TraceWindow
 
 ROOT = Path(__file__).resolve().parents[1]
 Environment = Literal["local", "dev", "prod"]
@@ -93,6 +94,16 @@ def run_receipt(run: Run) -> RunReceipt:
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def window_from(starts: Sequence[str]) -> TraceWindow:
+    """Bound trace reads by the attempt's own times; v2 otherwise searches one day."""
+    parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in starts if value]
+    if not parsed:
+        raise ValueError("No recorded run or thread time bounds the trace query.")
+    return TraceWindow(
+        min(parsed) - timedelta(hours=1), datetime.now(UTC) + timedelta(minutes=5)
+    )
 
 
 def save(path: Path, value: object) -> None:
@@ -636,6 +647,14 @@ class Conversation:
 
                 try:
                     trace_config = TraceConfig.from_env()
+                    starts = [str(run.get("created_at") or "") for run in runs]
+                    attachment = self.folder / "attachment.json"
+                    if attachment.exists():
+                        starts.append(
+                            str(json.loads(attachment.read_text()).get("thread_created_at") or "")
+                        )
+                    starts.append(str(attempt.get("created_at") or ""))
+                    trace_window = window_from(starts)
                 except ValueError as error:
                     sources["langsmith"] = {
                         "status": "unavailable",
@@ -643,10 +662,10 @@ class Conversation:
                     }
                 else:
                     try:
-                        snapshot = await asyncio.to_thread(
-                            collect_traces,
+                        snapshot = await collect_traces(
                             self.folder,
                             attempt["thread_id"],
+                            window=trace_window,
                             config=trace_config,
                             expected_run_ids=[run["run_id"] for run in runs],
                         )
