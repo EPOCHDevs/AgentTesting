@@ -665,7 +665,7 @@ def test_hosted_profiles_require_https(tmp_path, environment):
         app.Stack.load(config, environment)
 
 
-@pytest.mark.parametrize("environment", ["local", "dev", "prod"])
+@pytest.mark.parametrize("environment", ["local", "dev", "qa", "prod"])
 def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment):
     config_path = app.ROOT / "environments.toml"
     config = app.Stack.load(config_path, environment)
@@ -897,4 +897,5 @@ def test_readiness_checks_service_identity_and_ui_has_no_token(
 def test_profiles_name_their_trace_project_only_when_verified():
     path = app.ROOT / "environments.toml"
     assert app.Stack.load(path, "local").langsmith_project == "epoch-ai-local"
+    assert app.Stack.load(path, "qa").langsmith_project == "epoch-ai-staging"
     assert app.Stack.load(path, "dev").langsmith_project is None

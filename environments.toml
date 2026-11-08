@@ -15,6 +15,17 @@ ui_url = "https://app.dev.epoch.trade"
 assistant_id = "epoch-ai"
 token_env = "EPOCH_TOKEN"
 
+# QA from its published runtime config (app.qa.epoch.trade/epoch-runtime-config.json).
+# The agent is the release-owned staging deployment; it traces as agent
+# "epoch-ai", environment "staging".
+[qa]
+backend_url = "https://api.qa.epoch.trade"
+ai_url = "https://a-epoch-ai-staging-79e4b7d5-f030d9d740b65b41af24082880f7a58a.aws.us.langgraph.app"
+ui_url = "https://app.qa.epoch.trade"
+assistant_id = "epoch-ai"
+langsmith_project = "epoch-ai-staging"
+token_env = "EPOCH_TOKEN"
+
 # Production endpoints from the existing EpochAI/Portal deployment configuration.
 [prod]
 backend_url = "https://prod-server.epoch.trade"
