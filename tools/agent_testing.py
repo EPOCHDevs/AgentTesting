@@ -33,7 +33,7 @@ from tools.evidence_redaction import redact_run
 from tools.traces import TraceWindow
 
 ROOT = Path(__file__).resolve().parents[1]
-Environment = Literal["local", "dev", "prod"]
+Environment = Literal["local", "dev", "qa", "prod"]
 
 
 class ServiceIdentity(TypedDict):
@@ -133,6 +133,9 @@ class Stack:
     assistant_id: str = "epoch-ai"
     token_env: str = "EPOCH_TOKEN"
     environment: Environment = "dev"
+    # The LangSmith project this environment's agent traces to, when the
+    # profile names one; otherwise trace collection uses LANGSMITH_PROJECT.
+    langsmith_project: str | None = None
 
     def identity(self) -> ServiceIdentity:
         # Preserve the established endpoint receipt shape. Profile selection is
@@ -148,7 +151,7 @@ class Stack:
     @classmethod
     def load(cls, path: Path, environment: Environment = "dev") -> Stack:
         if environment not in get_args(Environment):
-            raise ValueError("Choose local, dev or prod.")
+            raise ValueError("Choose local, dev, qa or prod.")
         profiles = tomllib.loads(path.read_text())
         if environment not in profiles:
             raise ValueError(
@@ -646,7 +649,7 @@ class Conversation:
                 from tools.traces import collect as collect_traces
 
                 try:
-                    trace_config = TraceConfig.from_env()
+                    trace_config = TraceConfig.from_env(project=self.config.langsmith_project)
                     starts = [str(run.get("created_at") or "") for run in runs]
                     attachment = self.folder / "attachment.json"
                     if attachment.exists():

@@ -56,15 +56,30 @@ class TraceConfig:
             )
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> TraceConfig:
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None, *, project: str | None = None
+    ) -> TraceConfig:
+        """``project`` is the selected profile's trace project, when it names one.
+
+        A different LANGSMITH_PROJECT is refused rather than either value being
+        chosen silently, so one environment's attempt never reads another's traces.
+        """
         env = os.environ if environ is None else environ
-        required = ("LANGSMITH_ENDPOINT", "LANGSMITH_PROJECT", "LANGSMITH_API_KEY")
+        configured = env.get("LANGSMITH_PROJECT", "").strip()
+        if project and configured and configured != project:
+            raise ValueError(
+                f"LANGSMITH_PROJECT is {configured!r} but the selected environment traces to "
+                f"{project!r}; unset LANGSMITH_PROJECT or choose the matching environment."
+            )
+        required = ["LANGSMITH_ENDPOINT", "LANGSMITH_API_KEY"]
+        if not project:
+            required.insert(1, "LANGSMITH_PROJECT")
         missing = [name for name in required if not env.get(name, "").strip()]
         if missing:
             raise ValueError("Trace collection requires " + ", ".join(missing) + ".")
         return cls(
             endpoint=env["LANGSMITH_ENDPOINT"],
-            project=env["LANGSMITH_PROJECT"],
+            project=project or configured,
             api_key=env["LANGSMITH_API_KEY"],
             workspace_id=env.get("LANGSMITH_WORKSPACE_ID") or None,
         )

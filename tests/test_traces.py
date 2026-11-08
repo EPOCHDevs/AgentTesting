@@ -365,3 +365,14 @@ def test_configuration_is_explicit_and_does_not_expose_key():
         }
     )
     assert parsed.workspace_id == str(PROJECT)
+
+
+def test_profile_trace_project_is_used_and_never_silently_overridden():
+    env = {"LANGSMITH_ENDPOINT": "https://traces.example", "LANGSMITH_API_KEY": "key"}
+    assert TraceConfig.from_env(env, project="epoch-ai-staging").project == "epoch-ai-staging"
+    matching = {**env, "LANGSMITH_PROJECT": "epoch-ai-staging"}
+    assert TraceConfig.from_env(matching, project="epoch-ai-staging").project == "epoch-ai-staging"
+    with pytest.raises(ValueError, match="traces to 'epoch-ai-staging'"):
+        TraceConfig.from_env({**env, "LANGSMITH_PROJECT": "epoch-ai-local"}, project="epoch-ai-staging")
+    with pytest.raises(ValueError, match="LANGSMITH_PROJECT"):
+        TraceConfig.from_env(env)

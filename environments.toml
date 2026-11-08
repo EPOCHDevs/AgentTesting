@@ -4,6 +4,8 @@ backend_url = "http://localhost:9000"
 ai_url = "http://localhost:2024"
 ui_url = "http://localhost:3000"
 assistant_id = "epoch-ai"
+# EpochAI traces as agent "epoch-ai", environment "local" (EPOCH_AGENT_ENVIRONMENT).
+langsmith_project = "epoch-ai-local"
 token_env = "EPOCH_TOKEN"
 
 [dev]
