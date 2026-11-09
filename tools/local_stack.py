@@ -63,13 +63,6 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
     return config, resolved
 
 
-# Trading Economics is unavailable until its monthly quota returns (EpochBackend
-# ENG-2489). Its pages (Calendar, Rates, FX and Commodities) stay off locally, as in
-# every deployed environment (epoch-terraform #150), so a local stack never calls it.
-# Set False to restore them.
-TRADING_ECONOMICS_PAUSED = True
-
-
 def configure_market_pages(
     binary: Path, enabled: bool | None, *, catalog_root: str | None = None
 ) -> dict[str, str]:
@@ -105,8 +98,7 @@ def configure_market_pages(
     calendar = options.setdefault("calendar", {})
     if not isinstance(calendar, dict):
         raise ValueError("The Backend Calendar configuration must be an object.")
-    calendar_on = enabled and not TRADING_ECONOMICS_PAUSED
-    calendar.update(enabled=calendar_on, refresh_mode="automatic" if calendar_on else "paused")
+    calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
     fd, temporary = tempfile.mkstemp(dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:
@@ -116,7 +108,6 @@ def configure_market_pages(
     finally:
         Path(temporary).unlink(missing_ok=True)
     flag = "1" if enabled else "0"
-    te_flag = "0" if TRADING_ECONOMICS_PAUSED else flag
     batch = (
         # Every deployed environment uses 128 (epoch-terraform #146). The
         # Backend default of 8 splits each Equities universe into ~800 batches.
@@ -128,10 +119,10 @@ def configure_market_pages(
         **batch,
         # Equities runs through the Rates producer; FX, Commodities and Crypto
         # are separate programmes that are off unless enabled here.
-        "EPOCH_MI_RATES_PAGE": te_flag,
-        "EPOCH_MI_RATES_DAILY": te_flag,
-        "EPOCH_MI_FX_PAGE": te_flag,
-        "EPOCH_MI_COMMODITIES_PAGE": te_flag,
+        "EPOCH_MI_RATES_PAGE": flag,
+        "EPOCH_MI_RATES_DAILY": flag,
+        "EPOCH_MI_FX_PAGE": flag,
+        "EPOCH_MI_COMMODITIES_PAGE": flag,
         "EPOCH_MI_CRYPTO_PAGE": flag,
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
         "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": flag,
