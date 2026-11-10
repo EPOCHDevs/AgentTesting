@@ -90,9 +90,11 @@ build revision; rebuild it from that source through the normal Backend workflow.
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
 
-To populate the local Markets pages (Equities, Rates, Calendar, FX, Commodities
-and Crypto), set `market_pages = true` after building a Backend version that
-includes them. The primary Backend's
+Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
+**off by default**. The local stack uses the production vendor accounts, and
+automatic page refresh can spend the shared Barchart hourly quota that
+production pages and local research runs also need. To populate them, set
+`market_pages = true` after building a Backend version that includes them. The primary Backend's
 `.env.local` must set `EPOCH_CATALOG_ROOT` to an absolute path containing a selected
 native catalogue generation (`current/catalog_manifest.json`). Backend validates
 its hashes and provenance at startup; the launcher does not manufacture a generation
@@ -102,8 +104,7 @@ It updates only the generated `build/bin/config.json` Calendar settings and
 supplies the Rates, FX, Commodities and Crypto settings to the process, with the
 deployed environments' Equities source batch size (128); source configuration
 stays unchanged.
-Set `market_pages = false` to disable automatic page work. Omitting it leaves
-the existing runtime settings alone. Page preparation does not start LLM work;
+Omitting `market_pages` (or setting it to `false`) disables automatic page work. Page preparation does not start LLM work;
 opening a Rates context can run its declared text model, and previously accepted
 context tasks can resume after a restart. Calendar V1 event rows remain read-only.
 

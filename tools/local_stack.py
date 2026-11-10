@@ -63,6 +63,12 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
     return config, resolved
 
 
+# Local Markets pages are opt-in. The local stack uses the production vendor
+# accounts, and automatic page refresh spent the shared Barchart hourly quota
+# that production pages and local research runs also need (10 Nov).
+DEFAULT_MARKET_PAGES = False
+
+
 def configure_market_pages(
     binary: Path, enabled: bool | None, *, catalog_root: str | None = None
 ) -> dict[str, str]:
@@ -313,7 +319,7 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "EPOCH_COMPILER_METADATA_DIR": str(binary.parent / "compiler_metadata"),
         **configure_market_pages(
             binary,
-            config.get("market_pages"),
+            config.get("market_pages", DEFAULT_MARKET_PAGES),
             catalog_root=backend_values.get("EPOCH_CATALOG_ROOT"),
         ),
     }

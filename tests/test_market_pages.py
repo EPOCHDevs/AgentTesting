@@ -98,3 +98,10 @@ def test_enabling_market_pages_requires_selected_catalog_before_editing(tmp_path
 def test_unselected_catalog_does_not_enable_market_pages(tmp_path):
     with pytest.raises(ValueError, match="selected catalogue"):
         configure_market_pages(tmp_path / "server", True, catalog_root=str(tmp_path))
+
+
+def test_local_market_pages_default_to_off(tmp_path):
+    # The local stack shares production vendor quotas; page work is opt-in.
+    from tools.local_stack import DEFAULT_MARKET_PAGES
+
+    assert DEFAULT_MARKET_PAGES is False
