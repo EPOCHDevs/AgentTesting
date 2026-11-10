@@ -50,6 +50,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         file.parent.mkdir(parents=True, exist_ok=True)
         file.touch()
         file.chmod(0o700)
+    (backend / "build/bin/config.json").write_text(json.dumps({"plugins": [
+        {"name": "epoch_stratifyx::server::MiPageRuntimeService", "config": {}}]}))
     (ui / "node_modules").mkdir(parents=True)
     (backend / "services/stratifyx").mkdir(parents=True)
     (backend / "services/stratifyx/.env.local").write_text(
@@ -86,6 +88,10 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert be[3]["EPOCH_SKIP_AUTH"] == "0"
     assert be[3]["EPOCH_AI_URL"] == stack.ai_url
     assert be[3]["EPOCH_PROJECT_DIR"] == str(state / "backend")
+    # An unconfigured local stack keeps Markets page work off (shared vendor quotas).
+    assert be[3]["EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED"] == "0" and be[3]["EPOCH_MI_RATES_PAGE"] == "0"
+    runtime = json.loads((backend / "build/bin/config.json").read_text())
+    assert runtime["plugins"][0]["config"]["calendar"] == {"enabled": False, "refresh_mode": "paused"}
     assert portal[3]["VITE_API_BASE_URL"] == stack.backend_url
     assert portal[3]["VITE_LANGGRAPH_API_URL"] == stack.ai_url
     generated = json.loads((state / "ai/langgraph.json").read_text())
