@@ -90,7 +90,7 @@ def test_binary_cannot_come_from_a_nested_worktree(projects):
 
 def test_wrong_primary_branch_is_rejected(projects):
     git(projects / "EpochAI", "switch", "-c", "feature")
-    with pytest.raises(ValueError, match="check out dev"):
+    with pytest.raises(ValueError, match="check out main"):
         local_stack.verify_primary_checkouts()
 
 
@@ -101,19 +101,36 @@ def test_remote_changes_are_checked_without_a_cached_fetch(projects):
         projects,
         "clone",
         "--branch",
-        "dev",
+        "main",
         str(projects / "remotes/EpochAI.git"),
         str(clone),
     )
     git(clone, "commit", "--allow-empty", "-m", "new remote work")
-    git(clone, "push", "origin", "dev")
-    assert git(source, "rev-parse", "HEAD") == git(source, "rev-parse", "origin/dev")
+    git(clone, "push", "origin", "main")
+    assert git(source, "rev-parse", "HEAD") == git(source, "rev-parse", "origin/main")
     with pytest.raises(ValueError, match="not synchronized"):
         local_stack.verify_primary_checkouts()
 
 
-def test_local_only_commits_are_rejected(projects):
-    git(projects / "EpochAI", "commit", "--allow-empty", "-m", "not pushed")
+def test_clean_local_commits_can_be_tested_before_pushing(projects):
+    source = projects / "EpochAI"
+    remote = git(source, "rev-parse", "origin/main")
+    git(source, "commit", "--allow-empty", "-m", "not pushed")
+    record = local_stack.verify_primary_checkouts()["EpochAI"]
+    assert record["commit"] == git(source, "rev-parse", "HEAD")
+    assert record["origin_commit"] == remote
+    assert record["commit"] != remote
+
+
+@pytest.mark.parametrize("diverged", [False, True])
+def test_behind_or_diverged_local_commits_are_rejected(projects, diverged):
+    source = projects / "EpochAI"
+    remote = git(source, "rev-parse", "HEAD")
+    git(source, "commit", "--allow-empty", "-m", "remote work")
+    git(source, "push", "origin", "main")
+    git(source, "reset", "--hard", remote)
+    if diverged:
+        git(source, "commit", "--allow-empty", "-m", "different local work")
     with pytest.raises(ValueError, match="not synchronized"):
         local_stack.verify_primary_checkouts()
 

@@ -1,4 +1,4 @@
-"""Conversation driver for an explicitly selected local, dev or prod stack.
+"""Conversation driver for an explicitly selected local, local-up, dev, qa or prod stack.
 
 Adapted from EpochAI's supervisor CLI: persistent threads, explicit interrupt
 replies and live capture. Product implementation imports and database access
@@ -15,10 +15,10 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast, get_args
 from urllib.parse import quote, urlsplit
@@ -28,10 +28,16 @@ import httpx
 from langgraph_sdk.client import LangGraphClient
 from langgraph_sdk.schema import Command, Run, ThreadState
 
+from tools import local_auth
 from tools.evidence import render_transcript, summarize
+from tools.evidence_redaction import redact_run
+from tools.traces import TraceWindow
 
 ROOT = Path(__file__).resolve().parents[1]
-Environment = Literal["local", "dev", "prod"]
+Environment = Literal["local", "local-up", "dev", "qa", "prod"]
+# Stacks on this machine: the launcher's agent under `langgraph dev` (local)
+# or the licensed server under `langgraph up` (local-up). Both share local sign-in.
+LOCAL_ENVIRONMENTS = ("local", "local-up")
 
 
 class ServiceIdentity(TypedDict):
@@ -68,8 +74,40 @@ class RunHistory(TypedDict):
     runs: list[Run]
 
 
+class RunReceipt(TypedDict):
+    run_id: str
+    thread_id: str
+    status: str
+    created_at: NotRequired[str]
+    updated_at: NotRequired[str]
+
+
+def run_receipt(run: Run) -> RunReceipt:
+    """CLI identity/status only; server configuration may contain credentials."""
+    receipt: RunReceipt = {
+        "run_id": run["run_id"],
+        "thread_id": run["thread_id"],
+        "status": run["status"],
+    }
+    if run.get("created_at"):
+        receipt["created_at"] = str(run["created_at"])
+    if run.get("updated_at"):
+        receipt["updated_at"] = str(run["updated_at"])
+    return receipt
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def window_from(starts: Sequence[str]) -> TraceWindow:
+    """Bound trace reads by the attempt's own times; v2 otherwise searches one day."""
+    parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in starts if value]
+    if not parsed:
+        raise ValueError("No recorded run or thread time bounds the trace query.")
+    return TraceWindow(
+        min(parsed) - timedelta(hours=1), datetime.now(UTC) + timedelta(minutes=5)
+    )
 
 
 def save(path: Path, value: object) -> None:
@@ -99,6 +137,9 @@ class Stack:
     assistant_id: str = "epoch-ai"
     token_env: str = "EPOCH_TOKEN"
     environment: Environment = "dev"
+    # The LangSmith project this environment's agent traces to, when the
+    # profile names one; otherwise trace collection uses LANGSMITH_PROJECT.
+    langsmith_project: str | None = None
 
     def identity(self) -> ServiceIdentity:
         # Preserve the established endpoint receipt shape. Profile selection is
@@ -114,14 +155,15 @@ class Stack:
     @classmethod
     def load(cls, path: Path, environment: Environment = "dev") -> Stack:
         if environment not in get_args(Environment):
-            raise ValueError("Choose local, dev or prod.")
+            raise ValueError("Choose local, local-up, dev, qa or prod.")
         profiles = tomllib.loads(path.read_text())
         if environment not in profiles:
             raise ValueError(
                 f"No [{environment}] profile in {path}; no other profile will be substituted."
             )
         config = cls(**profiles[environment], environment=environment)
-        schemes = ("http", "https") if environment == "local" else ("https",)
+        local = environment in LOCAL_ENVIRONMENTS
+        schemes = ("http", "https") if local else ("https",)
         for url in (config.ai_url, config.backend_url, config.ui_url):
             parts = urlsplit(url)
             if (
@@ -133,23 +175,68 @@ class Stack:
                 or parts.fragment
             ):
                 raise ValueError(
-                    f"Configure explicit {'HTTP(S)' if environment == 'local' else 'HTTPS'} {environment} service URLs without credentials or query strings."
+                    f"Configure explicit {'HTTP(S)' if local else 'HTTPS'} {environment} service URLs without credentials or query strings."
                 )
         return config
 
+    @property
+    def is_local(self) -> bool:
+        return self.environment in LOCAL_ENVIRONMENTS
+
+    def login_path(self) -> Path:
+        # Hosted logins are cached per Portal host, so one never reaches another stack.
+        if self.is_local:
+            return local_auth.token_path()
+        return local_auth.token_path(cast(str, urlsplit(self.ui_url).hostname))
+
+    def user_pool(self) -> local_auth.UserPool:
+        """The sign-in pool the selected Portal publishes; local's is fixed."""
+        if self.is_local:
+            return local_auth.LOCAL
+        try:
+            response = httpx.get(
+                self.ui_url.rstrip("/") + "/epoch-runtime-config.json", timeout=15
+            )
+            response.raise_for_status()
+            published = response.json()
+            auth = published["amplifyOutputs"]["auth"]
+            pool = local_auth.UserPool(auth["user_pool_id"], auth["user_pool_client_id"])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            raise ValueError(
+                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; set {self.token_env}."
+            ) from None
+        profile = {
+            "backendUrl": self.backend_url,
+            "agentUrl": self.ai_url,
+            "assistantId": self.assistant_id,
+        }
+        differs = [
+            key
+            for key, value in profile.items()
+            if str(published.get(key, "")).rstrip("/") != value.rstrip("/")
+        ]
+        if differs:
+            raise ValueError(
+                f"The {self.environment} Portal publishes a different {', '.join(differs)} than environments.toml; update the profile before signing in."
+            )
+        return pool
+
+    def login(self, email: str | None = None) -> None:
+        local_auth.login(email, self.login_path(), self.user_pool())
+
     def bearer(self) -> str:
         value = os.environ.get(self.token_env)
-        if (
-            not value
-            and self.environment == "local"
-            and self.token_env == "EPOCH_TOKEN"
-        ):
-            from tools.local_auth import cached_token
-
-            value = cached_token()
+        if not value and self.token_env == "EPOCH_TOKEN":
+            if self.is_local:
+                value = local_auth.cached_token()
+            elif self.login_path().exists():
+                value = local_auth.cached_token(
+                    self.login_path(),
+                    login_command=f"python -m tools.agent_testing --env {self.environment} login",
+                )
         if not value:
             raise ValueError(
-                f"Set {self.token_env} to your Epoch identity token; credentials are never stored in this repo."
+                f"Set {self.token_env} to your Epoch identity token, or run python -m tools.agent_testing --env {self.environment} login; credentials are never stored in this repo."
             )
         return "Bearer " + value
 
@@ -184,12 +271,21 @@ async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
             config.backend_url.rstrip("/") + "/api/v1/health",
             headers={"Authorization": bearer},
         )
+        commentary = await client.get(
+            config.ai_url.rstrip("/") + "/api/v1/execution-extensions/commentary-policy",
+            headers={"Authorization": bearer},
+        )
         # UI redirects to its login page before authentication. This proves
         # reachability, not a logged-in browser session or rendering parity.
         ui = await client.get(config.ui_url, follow_redirects=True)
     ai.raise_for_status()
     backend.raise_for_status()
     ui.raise_for_status()
+    if commentary.status_code != 200:
+        raise RuntimeError(
+            f"{config.environment} AI commentary policy is not ready "
+            f"(HTTP {commentary.status_code}); inspect its deployment configuration."
+        )
     ai_health, backend_health = ai.json(), backend.json()
     build = ai_health.get("build_study", {})
     if ai_health.get("status") != "healthy" or build.get("ready") is not True:
@@ -293,7 +389,7 @@ class Conversation:
                 new = [run for run in page if run["run_id"] not in found]
                 if page and not new:
                     raise RuntimeError("Run pagination did not advance.")
-                found.update((run["run_id"], run) for run in new)
+                found.update((run["run_id"], redact_run(run)) for run in new)
                 if len(page) < 100:
                     receipt["complete"] = True
                     break
@@ -307,9 +403,11 @@ class Conversation:
             receipt["runs"] = list(found.values())
             previous = self.folder / "runs.json"
             if previous.exists():
+                captured = cast(RunHistory, json.loads(previous.read_text()))
+                captured["runs"] = [redact_run(run) for run in captured["runs"]]
                 save(
                     self.folder / "run-captures" / f"{uuid4()}.json",
-                    json.loads(previous.read_text()),
+                    captured,
                 )
             save(self.folder / "run-captures" / f"{uuid4()}.json", receipt)
             save(previous, receipt)
@@ -327,7 +425,7 @@ class Conversation:
             "thread_id": attempt["thread_id"],
             "thread_status": thread["status"],
             "pending": pending(state),
-            "runs": runs,
+            "runs": [redact_run(run) for run in runs],
             "environment": self.config.environment,
         }
         save(self.folder / "status.json", result)
@@ -367,7 +465,9 @@ class Conversation:
                         "This turn key already names a different request. Choose a new key."
                     )
                 if run_file.exists():
-                    return cast(Run, json.loads(run_file.read_text()))
+                    captured = redact_run(cast(Run, json.loads(run_file.read_text())))
+                    save(run_file, captured)
+                    return captured
                 if (target / "rejected.json").exists():
                     raise RuntimeError(
                         "The server rejected this submission. Inspect rejected.json and use a new key after correcting the cause."
@@ -396,8 +496,9 @@ class Conversation:
                             raise RuntimeError(
                                 "Multiple matching runs need manual inspection."
                             )
-                        save(run_file, matches[0])
-                        return matches[0]
+                        captured = redact_run(matches[0])
+                        save(run_file, captured)
+                        return captured
                     if len(runs) < 100:
                         break
                     offset += len(runs)
@@ -502,8 +603,9 @@ class Conversation:
                         },
                     )
                 raise
-            save(run_file, result)
-            return result
+            captured = redact_run(result)
+            save(run_file, captured)
+            return captured
 
     async def pull(
         self,
@@ -579,7 +681,7 @@ class Conversation:
                     refreshed = await self.client.runs.get(
                         attempt["thread_id"], accepted["run_id"]
                     )
-                    save(path, refreshed)
+                    save(path, redact_run(refreshed))
                 sources["thread"] = {
                     "status": "available" if history["complete"] else "partial",
                     "run_count": len(runs),
@@ -597,7 +699,15 @@ class Conversation:
                 from tools.traces import collect as collect_traces
 
                 try:
-                    trace_config = TraceConfig.from_env()
+                    trace_config = TraceConfig.from_env(project=self.config.langsmith_project)
+                    starts = [str(run.get("created_at") or "") for run in runs]
+                    attachment = self.folder / "attachment.json"
+                    if attachment.exists():
+                        starts.append(
+                            str(json.loads(attachment.read_text()).get("thread_created_at") or "")
+                        )
+                    starts.append(str(attempt.get("created_at") or ""))
+                    trace_window = window_from(starts)
                 except ValueError as error:
                     sources["langsmith"] = {
                         "status": "unavailable",
@@ -605,10 +715,10 @@ class Conversation:
                     }
                 else:
                     try:
-                        snapshot = await asyncio.to_thread(
-                            collect_traces,
+                        snapshot = await collect_traces(
                             self.folder,
                             attempt["thread_id"],
+                            window=trace_window,
                             config=trace_config,
                             expected_run_ids=[run["run_id"] for run in runs],
                         )
@@ -786,6 +896,9 @@ async def run(args: argparse.Namespace) -> object:
             evidence=args.evidence or [],
         )
     config = Stack.load(args.config, args.env)
+    if args.action == "login":
+        config.login(args.email)
+        return {"environment": config.environment, "login": str(config.login_path())}
     if args.action != "check":
         folder = args.artifacts / args.attempt
         if (folder / "attempt.json").exists():
@@ -846,6 +959,10 @@ def main() -> None:
     parser.add_argument("--artifacts", type=Path, default=ROOT / ".artifacts")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("check")
+    login = sub.add_parser(
+        "login", help="Sign in to the selected stack's Portal user pool"
+    )
+    login.add_argument("--email")
     sub.add_parser("index")
     for name in ("ask", "answer", "status", "pull", "attach", "report", "review"):
         command = sub.add_parser(name)
@@ -902,7 +1019,19 @@ def main() -> None:
     ):
         parser.error("Use a simple attempt name, not a path.")
     result = asyncio.run(run(args))
-    if args.action == "pull" and isinstance(result, dict):
+    if args.action in ("ask", "answer"):
+        result = run_receipt(cast(Run, result))
+    elif args.action in ("status", "attach"):
+        status = cast(Status, result)
+        result = {
+            "checked_at": status["checked_at"],
+            "environment": status["environment"],
+            "thread_id": status["thread_id"],
+            "thread_status": status["thread_status"],
+            "pending": status["pending"],
+            "runs": [run_receipt(item) for item in status["runs"]],
+        }
+    elif args.action == "pull" and isinstance(result, dict):
         details = result["metrics"]
         result = {
             "environment": result["environment"],

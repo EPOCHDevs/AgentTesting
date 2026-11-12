@@ -7,7 +7,7 @@ conversations and reviewing the evidence behind their results.
 
 | Folder | Purpose |
 |---|---|
-| `scenarios/` | Realistic role briefs, opening questions and known exclusions |
+| `scenarios/` | Role briefs, opening questions, phased workflow coverage and known exclusions |
 | `campaigns/` | Assignments, coverage and attempt records |
 | `tools/` | Conversation and evidence helpers |
 | `notebooks/` | Review views and examples |
@@ -18,7 +18,10 @@ Choose a scenario → have a conversation → collect evidence → review → re
 
 Start with the [research situations](scenarios/README.md). The researcher reacts
 to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
-Each attempt owns its records; a shared index can summarize them without competing
+Plan campaign breadth and depth with the [workflow coverage programme](scenarios/coverage/README.md),
+including release prerequisites, meaningful variants and evidence requirements.
+Reviewers follow the [audit scope](AGENTS.md). Each attempt owns its records;
+a shared index can summarize them without competing
 writes. A completed conversation is not automatically a passing result.
 
 CLI, API and direct UI interaction are possible ways to drive a conversation.
@@ -63,12 +66,14 @@ The launcher uses the primary repositories beside AgentTesting:
 | Directory | Branch |
 |---|---|
 | `EpochBackend/` | `main` |
-| `EpochAI/` | `dev` |
-| `EpochClientPortal/` | `dev` |
+| `EpochAI/` | `main` |
+| `EpochClientPortal/` | `main` |
 
 Before login or startup it checks those branches, rejects linked worktrees and
 uncommitted tracked changes, and compares each checkout with its current remote
-branch. It prints and records the source commits. It never switches or pulls
+branch. Clean local commits ahead of that branch are allowed for testing before
+push; behind, diverged or unverifiable checkouts are rejected. It prints the local
+commits and records both local and remote revisions. It never switches or pulls
 repositories automatically. Worktree/path overrides are not enabled.
 
 Use the primary Backend's existing `build/bin/epoch_stratifyx_server`, the
@@ -80,36 +85,79 @@ build revision; rebuild it from that source through the normal Backend workflow.
 .venv/bin/python -m tools.local_stack
 ```
 
+The agent server runs under `langgraph dev` on port 2024 by default (`local`
+profile). That server shares one Python process, so concurrent runs wait on each
+other. For parallel runs, start the licensed server instead:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up
+```
+
+This uses the `local-up` profile: the same Backend (9000) and Portal (3000) with
+the agent on **2124** under `langgraph up` (Postgres, Redis queue, background
+workers, custom auth). It needs Docker and a `LANGSMITH_API_KEY` with LangSmith
+Deployment access plus the matching `LANGSMITH_ENDPOINT`; no Enterprise licence
+key is used. The launcher builds `epoch-ai-up:<EpochAI commit>` from EpochAI's
+own `langgraph.json` once per commit (log: `.artifacts/local-stack/ai-build.log`),
+writes `langgraph-up.local.json`, `.env.up.local` (mode 600) and
+`docker-compose.up.local.yml` in EpochAI's directory, keeps them out of `git status`
+through `.git/info/exclude`, points the container at the host's Backend through
+`host.docker.internal`, and mounts host directories named by the agent env
+read-only at the same paths. Ctrl+C stops the services and runs
+`docker compose down`; Postgres data stays in its volume. Use
+`--env local-up` with `tools.agent_testing` for this stack.
+
 `local-stack.toml` is optional and may set `node_bin`; see
 `local-stack.example.toml`. Remove old worktree paths from an existing local
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
 
-To populate the local Rates and Calendar pages, set `market_pages = true` after
-building a Backend version that includes Calendar. The primary Backend's
+Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
+**off by default**. The local stack uses the production vendor accounts, and
+automatic page refresh can spend the shared Barchart hourly quota that
+production pages and local research runs also need. To populate them, set
+`market_pages = true` after building a Backend version that includes them. The primary Backend's
 `.env.local` must set `EPOCH_CATALOG_ROOT` to an absolute path containing a selected
 native catalogue generation (`current/catalog_manifest.json`). Backend validates
 its hashes and provenance at startup; the launcher does not manufacture a generation
 from an unversioned asset file. This enables native source
 capture, page publication and automatic refresh using the configured vendors.
 It updates only the generated `build/bin/config.json` Calendar settings and
-supplies the Rates settings to the process; source configuration stays unchanged.
-Set `market_pages = false` to disable automatic page work. Omitting it leaves
-the existing runtime settings alone. Page preparation does not start LLM work;
+supplies the Rates, FX, Commodities and Crypto settings to the process, with the
+deployed environments' Equities source batch size (128); source configuration
+stays unchanged.
+Omitting `market_pages` (or setting it to `false`) disables automatic page work. Page preparation does not start LLM work;
 opening a Rates context can run its declared text model, and previously accepted
 context tasks can resume after a restart. Calendar V1 event rows remain read-only.
 
 The launcher asks for your Epoch email/password on first use, starts Backend →
 AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
 sign in with the same account. The CLI and browser maintain separate sessions.
+The local commentary deployment is identified by the verified AI commit, or by
+`EPOCH_COMMENTARY_DEPLOYMENT_REVISION` in the AI environment when explicitly set.
+It is recorded in `source-checkouts.json`; rotate an explicit revision when a
+remote model deployment changes without a source change. Readiness checks the
+commentary policy without making a model call.
 Ctrl+C stops only the services started by this command. An occupied port or a
 failed service stops startup; the launcher never substitutes a hosted service.
 
 The password is not saved. Refreshable local CLI tokens are stored with private
 permissions in `~/.config/epoch-agent-testing/local-login.json`; use `--login` to
 change the account, or delete that file to forget it. `--env local` test commands
-use this login automatically unless `EPOCH_TOKEN` is explicitly set. Dev/prod
-still require their configured token variable.
+use this login automatically unless `EPOCH_TOKEN` is explicitly set.
+
+A hosted stack whose Portal publishes `epoch-runtime-config.json` (QA today) has
+its own login:
+
+```bash
+.venv/bin/python -m tools.agent_testing --env qa login
+```
+
+It reads the sign-in pool from that Portal and refuses when the Portal names a
+different Backend, agent or assistant than `environments.toml`. Each login is
+cached per Portal host, so one stack's login never authenticates another. A stack
+without a published runtime config (dev and prod for now) needs its configured
+token variable.
 
 Service logs, AI state and Backend study records stay under
 `.artifacts/local-stack/`. The generated AI configuration can contain service
@@ -140,6 +188,10 @@ changing its input is rejected. An uncertain submission is never silently retrie
 A definite server rejection is recorded separately; correct its cause and submit
 under a new key. Failed attempts remain available for review.
 
+The CLI prints run identities, status and pending questions. Server-returned run
+configuration stays out of terminal output because it can contain authentication
+data. Raw diagnostic artifacts remain private under `.artifacts/`.
+
 For a clarification, `status` shows the current interrupt IDs and payloads. Write
 a local JSON file mapping the selected IDs to their explicit response payloads,
 then use `answer industrial-01 --key clarification-1 --responses /path/to/answers.json`.
@@ -161,10 +213,11 @@ A conversation started in the UI can be attached without sending a message:
 .venv/bin/python -m tools.agent_testing report review-01
 ```
 
-For `--traces`, configure `LANGSMITH_ENDPOINT`, `LANGSMITH_PROJECT` and
-`LANGSMITH_API_KEY` in the environment; `LANGSMITH_WORKSPACE_ID` is optional.
-Choose the selected stack's tracing project explicitly. A profile switch does
-not guess or change LangSmith credentials. Each profile's `token_env` can name
+For `--traces`, configure `LANGSMITH_ENDPOINT` and `LANGSMITH_API_KEY` in the
+environment; `LANGSMITH_WORKSPACE_ID` is optional. A profile that names its
+`langsmith_project` (local and qa) reads that project; set `LANGSMITH_PROJECT`
+for the others. A `LANGSMITH_PROJECT` that contradicts the profile is refused.
+A profile switch does not guess or change LangSmith credentials. Each profile's `token_env` can name
 its own Epoch token variable when credentials differ. Never commit the keys.
 
 The pull collects the thread and full run list, LangSmith trace trees, and Backend
@@ -172,6 +225,14 @@ records for the thread's accepted execution IDs. An explicit `--execution-id ID`
 can add a known execution receipt. Each requested source is attempted separately.
 Missing, expired or incomplete evidence is reported; a partial pull exits with
 code 2 after saving what it obtained.
+
+Run evidence replaces credentials in the server-owned authenticated-user,
+runtime-context and legacy configurable-header fields with `[REDACTED]`.
+LangSmith captures likewise redact legacy auth headers promoted into trace
+metadata. Message/tool payloads, financial fields, identities and usage remain
+unchanged. Backend execution records separately redact `artifact_source.signed_query`.
+This is targeted transport redaction, not a scan of arbitrary text. Older files
+are not rewritten in bulk; an already-running collector keeps its loaded code.
 
 `report.md` shows agent usage, observed errors, span timing and reported cost, plus
 Backend status, logs, configuration/HTTP/record events and native job timing where

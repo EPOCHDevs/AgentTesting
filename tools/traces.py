@@ -3,6 +3,11 @@
 The SDK owns the Run schema. Snapshots retain its records, including nullable
 provider-estimated costs; this module never rates tokens or adds overlapping
 span costs. API query completion is not proof of tracing/ingestion completeness.
+
+Reads use LangSmith's v2 run and trace queries; the v1 endpoints stop working on
+2027-01-31. A v2 run reports its own usage only, so trace totals come from the
+provider's trace aggregates. Every query is bounded by an explicit time window,
+because v2 otherwise searches only the last 24 hours.
 """
 
 from __future__ import annotations
@@ -18,9 +23,11 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from tools.evidence_redaction import redact_trace_run
+
 if TYPE_CHECKING:
     from langsmith import Client
-    from langsmith.schemas import Run
+    from langsmith.types import Run
 
 
 @dataclass(frozen=True)
@@ -49,18 +56,47 @@ class TraceConfig:
             )
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> TraceConfig:
+    def from_env(
+        cls, environ: Mapping[str, str] | None = None, *, project: str | None = None
+    ) -> TraceConfig:
+        """``project`` is the selected profile's trace project, when it names one.
+
+        A different LANGSMITH_PROJECT is refused rather than either value being
+        chosen silently, so one environment's attempt never reads another's traces.
+        """
         env = os.environ if environ is None else environ
-        required = ("LANGSMITH_ENDPOINT", "LANGSMITH_PROJECT", "LANGSMITH_API_KEY")
+        configured = env.get("LANGSMITH_PROJECT", "").strip()
+        if project and configured and configured != project:
+            raise ValueError(
+                f"LANGSMITH_PROJECT is {configured!r} but the selected environment traces to "
+                f"{project!r}; unset LANGSMITH_PROJECT or choose the matching environment."
+            )
+        required = ["LANGSMITH_ENDPOINT", "LANGSMITH_API_KEY"]
+        if not project:
+            required.insert(1, "LANGSMITH_PROJECT")
         missing = [name for name in required if not env.get(name, "").strip()]
         if missing:
             raise ValueError("Trace collection requires " + ", ".join(missing) + ".")
         return cls(
             endpoint=env["LANGSMITH_ENDPOINT"],
-            project=env["LANGSMITH_PROJECT"],
+            project=project or configured,
             api_key=env["LANGSMITH_API_KEY"],
             workspace_id=env.get("LANGSMITH_WORKSPACE_ID") or None,
         )
+
+
+@dataclass(frozen=True)
+class TraceWindow:
+    """Run start times to search. v2 defaults to the last day when omitted."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        if self.start.tzinfo is None or self.end.tzinfo is None:
+            raise ValueError("Trace window bounds must be timezone-aware.")
+        if self.start >= self.end:
+            raise ValueError("Trace window must start before it ends.")
 
 
 class TraceSource(TypedDict):
@@ -83,10 +119,18 @@ class RejectedRun(TypedDict):
     reason: str
 
 
+class TraceTotals(TypedDict):
+    total_tokens: int | None
+    total_cost: str | None
+    first_token_time: str | None
+
+
 class TraceCoverage(TypedDict):
     complete: bool
     root_query_complete: bool
     root_query_error_type: str | None
+    aggregate_query_complete: bool
+    aggregate_query_error_type: str | None
     trace_queries: list[TraceQuery]
     rejected_runs: list[RejectedRun]
     incomplete_reasons: list[str]
@@ -97,47 +141,68 @@ class TraceCoverage(TypedDict):
 
 
 class TraceSnapshot(TypedDict):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     thread_id: str
     collected_at: str
     source: TraceSource
+    window: dict[str, str]
     root_run_ids: list[str]
     runs: list[Run]
+    trace_aggregates: dict[str, TraceTotals]
     coverage: TraceCoverage
 
 
 # Source-owned fields requested from the API, not a client-side Run replica.
-RUN_FIELDS = (
-    "id",
-    "trace_id",
-    "parent_run_id",
-    "parent_run_ids",
-    "session_id",
-    "name",
-    "run_type",
-    "start_time",
-    "end_time",
-    "first_token_time",
-    "status",
-    "error",
-    "extra",
-    "inputs",
-    "outputs",
-    "events",
-    "tags",
-    "dotted_order",
-    "app_path",
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "prompt_token_details",
-    "completion_token_details",
-    "prompt_cost",
-    "completion_cost",
-    "total_cost",
-    "prompt_cost_details",
-    "completion_cost_details",
+RUN_SELECTS = (
+    "ID",
+    "TRACE_ID",
+    "PARENT_RUN_IDS",
+    "PROJECT_ID",
+    "THREAD_ID",
+    "NAME",
+    "RUN_TYPE",
+    "START_TIME",
+    "END_TIME",
+    "LATENCY_SECONDS",
+    "FIRST_TOKEN_TIME",
+    "STATUS",
+    "ERROR",
+    "EXTRA",
+    "METADATA",
+    "INPUTS",
+    "OUTPUTS",
+    "EVENTS",
+    "TAGS",
+    "DOTTED_ORDER",
+    "APP_PATH",
+    "PROMPT_TOKENS",
+    "COMPLETION_TOKENS",
+    "TOTAL_TOKENS",
+    "PROMPT_TOKEN_DETAILS",
+    "COMPLETION_TOKEN_DETAILS",
+    "PROMPT_COST",
+    "COMPLETION_COST",
+    "TOTAL_COST",
+    "PROMPT_COST_DETAILS",
+    "COMPLETION_COST_DETAILS",
 )
+
+# Trace-wide sums from the provider; v2 run costs no longer include children.
+AGGREGATE_SELECTS = ("ID", "TRACE_ID", "TOTAL_TOKENS", "TOTAL_COST", "FIRST_TOKEN_TIME")
+
+
+def parent_id(run: Run) -> str | None:
+    """The immediate parent: the last ancestor in v2's root-first list."""
+    ancestors = run.parent_run_ids or []
+    return str(ancestors[-1]) if ancestors else None
+
+
+def run_metadata(run: Run) -> Mapping[str, object]:
+    if isinstance(run.metadata, Mapping):
+        return run.metadata
+    extra = run.extra if isinstance(run.extra, Mapping) else {}
+    metadata = extra.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
 
 
 def _snapshot_json(snapshot: TraceSnapshot) -> str:
@@ -162,20 +227,21 @@ def _save(folder: Path, snapshot: TraceSnapshot) -> None:
     temporary.replace(target / "langsmith.json")
 
 
-def collect(
+async def collect(
     folder: Path,
     thread_id: str,
     *,
+    window: TraceWindow,
     config: TraceConfig | None = None,
     client: Client | None = None,
     expected_run_ids: Sequence[str] = (),
 ) -> TraceSnapshot:
     """Collect every accessible root and descendant for an exact thread/project.
 
-    Only read_project/list_runs are used. Call with asyncio.to_thread from an
-    async runner. expected_run_ids may contain local LangGraph run receipt IDs;
-    roots match them by Run.id or explicit root metadata.run_id. A missing match
-    is reported, never silently treated as a zero-cost turn.
+    Only project, run and trace reads are used. expected_run_ids may contain
+    local LangGraph run receipt IDs; roots match them by Run.id or explicit
+    root metadata.run_id. A missing match is reported, never silently treated
+    as a zero-cost turn.
     """
     if not thread_id.strip():
         raise ValueError("A nonempty thread ID is required.")
@@ -186,7 +252,7 @@ def collect(
             from langsmith import Client
         except ImportError as error:
             raise RuntimeError(
-                "Install langsmith==0.14.12 to enable trace collection."
+                "Install langsmith==0.14.17 to enable trace collection."
             ) from error
         client = Client(
             api_url=config.endpoint,
@@ -196,7 +262,8 @@ def collect(
             timeout_ms=30_000,
         )
     try:
-        snapshot = _collect(client, config, thread_id, expected_run_ids)
+        snapshot = await _collect(client, config, thread_id, window, expected_run_ids)
+        snapshot["runs"] = [redact_trace_run(run) for run in snapshot["runs"]]
         _save(folder, snapshot)
         return snapshot
     finally:
@@ -204,26 +271,29 @@ def collect(
             client.close()
 
 
-def _collect(
+async def _collect(
     client: Client,
     config: TraceConfig,
     thread_id: str,
+    window: TraceWindow,
     expected_run_ids: Sequence[str],
 ) -> TraceSnapshot:
     coverage: TraceCoverage = {
         "complete": False,
         "root_query_complete": False,
         "root_query_error_type": None,
+        "aggregate_query_complete": False,
+        "aggregate_query_error_type": None,
         "trace_queries": [],
         "rejected_runs": [],
         "incomplete_reasons": [],
         "open_run_ids": [],
         "expected_run_ids": sorted(set(expected_run_ids)),
         "unmatched_expected_run_ids": [],
-        "scope": "Query-exhausted provider snapshot only. Sampling, ingestion delay, untraced work and unavailable historical runs cannot be ruled out. Costs are LangSmith estimates, not billing receipts. Span durations overlap and must not be summed as wall time.",
+        "scope": "Query-exhausted provider snapshot within the recorded time window only. Sampling, ingestion delay, untraced work and unavailable historical runs cannot be ruled out. Costs are LangSmith estimates, not billing receipts. Span durations overlap and must not be summed as wall time.",
     }
     snapshot: TraceSnapshot = {
-        "schema_version": 1,
+        "schema_version": 2,
         "thread_id": thread_id,
         "collected_at": datetime.now(UTC).isoformat(),
         "source": {
@@ -233,8 +303,13 @@ def _collect(
             "project_id": None,
             "workspace_id": config.workspace_id,
         },
+        "window": {
+            "min_start_time": window.start.isoformat(),
+            "max_start_time": window.end.isoformat(),
+        },
         "root_run_ids": [],
         "runs": [],
+        "trace_aggregates": {},
         "coverage": coverage,
     }
     roots: dict[str, Run] = {}
@@ -243,7 +318,7 @@ def _collect(
         coverage["rejected_runs"].append({"run_id": str(run.id), "reason": reason})
 
     try:
-        project_id = str(client.read_project(project_name=config.project).id)
+        project_id = str((await client.aread_project(project_name=config.project)).id)
         snapshot["source"]["project_id"] = project_id
         # JSON quoting is for the LangSmith filter language, never shell text.
         root_filter = (
@@ -251,14 +326,19 @@ def _collect(
             + json.dumps(thread_id)
             + "))"
         )
-        for run in client.list_runs(
-            project_id=project_id, is_root=True, filter=root_filter, select=RUN_FIELDS
+        async for run in client.runs.query(
+            project_ids=[project_id],
+            is_root=True,
+            filter=root_filter,
+            selects=list(RUN_SELECTS),
+            min_start_time=window.start,
+            max_start_time=window.end,
         ):
-            if str(run.session_id) != project_id:
+            if str(run.project_id) != project_id:
                 reject(run, "project_mismatch")
-            elif run.parent_run_id is not None:
+            elif parent_id(run) is not None:
                 reject(run, "root_has_parent")
-            elif run.metadata.get("thread_id") != thread_id:
+            elif run_metadata(run).get("thread_id") != thread_id:
                 reject(run, "thread_metadata_mismatch")
             else:
                 roots[str(run.id)] = run
@@ -268,8 +348,38 @@ def _collect(
         coverage["root_query_error_type"] = type(error).__name__
         coverage["incomplete_reasons"].append("root_query_failed")
 
+    trace_ids = sorted({str(run.trace_id) for run in roots.values()})
+    if trace_ids:
+        try:
+            async for trace in client.traces.query(
+                project_id=snapshot["source"]["project_id"],
+                trace_ids=trace_ids,
+                selects=list(AGGREGATE_SELECTS),
+                min_start_time=window.start,
+                max_start_time=window.end,
+            ):
+                totals = trace.trace_aggregates
+                if totals is None:
+                    continue
+                snapshot["trace_aggregates"][str(trace.root_run.trace_id)] = {
+                    "total_tokens": totals.total_tokens,
+                    "total_cost": None
+                    if totals.total_cost is None
+                    else str(totals.total_cost),
+                    "first_token_time": None
+                    if totals.first_token_time is None
+                    else str(totals.first_token_time),
+                }
+            coverage["aggregate_query_complete"] = True
+        except Exception as error:
+            coverage["aggregate_query_error_type"] = type(error).__name__
+            coverage["incomplete_reasons"].append("aggregate_query_failed")
+        for trace_id in trace_ids:
+            if trace_id not in snapshot["trace_aggregates"]:
+                coverage["incomplete_reasons"].append("missing_trace_aggregates:" + trace_id)
+
     accepted = dict(roots)
-    for trace_id in sorted({str(run.trace_id) for run in roots.values()}):
+    for trace_id in trace_ids:
         trace_roots = {
             rid for rid, run in roots.items() if str(run.trace_id) == trace_id
         }
@@ -283,20 +393,22 @@ def _collect(
         }
         candidates: dict[str, Run] = {}
         try:
-            for run in client.list_runs(
-                project_id=snapshot["source"]["project_id"],
+            async for run in client.runs.query(
+                project_ids=[snapshot["source"]["project_id"]],
                 trace_id=trace_id,
-                select=RUN_FIELDS,
+                selects=list(RUN_SELECTS),
+                min_start_time=window.start,
+                max_start_time=window.end,
             ):
-                if str(run.session_id) != snapshot["source"]["project_id"]:
+                if str(run.project_id) != snapshot["source"]["project_id"]:
                     reject(run, "project_mismatch")
                 elif str(run.trace_id) != trace_id:
                     reject(run, "trace_mismatch")
-                elif run.parent_run_id is None and str(run.id) not in roots:
+                elif parent_id(run) is None and str(run.id) not in roots:
                     reject(run, "unmatched_root")
                 elif str(run.id) in roots and (
-                    run.parent_run_id is not None
-                    or run.metadata.get("thread_id") != thread_id
+                    parent_id(run) is not None
+                    or run_metadata(run).get("thread_id") != thread_id
                     or str(roots[str(run.id)].trace_id) != trace_id
                 ):
                     reject(run, "root_identity_changed")
@@ -314,7 +426,7 @@ def _collect(
             ready = [
                 rid
                 for rid, run in remaining.items()
-                if rid in connected or str(run.parent_run_id) in connected
+                if rid in connected or parent_id(run) in connected
             ]
             if not ready:
                 break
@@ -337,9 +449,9 @@ def _collect(
     )
     identified = set(roots)
     identified.update(
-        str(run.metadata["run_id"])
+        str(run_metadata(run)["run_id"])
         for run in roots.values()
-        if run.metadata.get("run_id")
+        if run_metadata(run).get("run_id")
     )
     coverage["unmatched_expected_run_ids"] = sorted(set(expected_run_ids) - identified)
     if not roots:

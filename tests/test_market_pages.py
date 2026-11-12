@@ -44,15 +44,26 @@ def test_explicit_market_choice_preserves_other_runtime_configuration(tmp_path):
         },
     }
     assert env == {
+        "EPOCH_EQUITIES_SOURCE_BATCH_MEMBERS": "128",
         "EPOCH_MI_RATES_PAGE": "1",
         "EPOCH_MI_RATES_DAILY": "1",
+        "EPOCH_MI_FX_PAGE": "1",
+        "EPOCH_MI_COMMODITIES_PAGE": "1",
+        "EPOCH_MI_CRYPTO_PAGE": "1",
         "EPOCH_MI_LOCAL_ATOMIC_INSIGHTS": "1",
         "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED": "1",
     }
     env = configure_market_pages(tmp_path / "server", False)
-    assert (
-        env["EPOCH_MI_RATES_PAGE"] == env["EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED"] == "0"
+    disabled = (
+        "EPOCH_MI_RATES_PAGE",
+        "EPOCH_MI_RATES_DAILY",
+        "EPOCH_MI_FX_PAGE",
+        "EPOCH_MI_COMMODITIES_PAGE",
+        "EPOCH_MI_CRYPTO_PAGE",
+        "EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED",
     )
+    assert {key: env[key] for key in disabled} == dict.fromkeys(disabled, "0")
+    assert "EPOCH_EQUITIES_SOURCE_BATCH_MEMBERS" not in env
     assert json.loads(path.read_text())["plugins"][1]["config"]["calendar"] == {
         "enabled": False,
         "refresh_mode": "paused",
@@ -87,3 +98,10 @@ def test_enabling_market_pages_requires_selected_catalog_before_editing(tmp_path
 def test_unselected_catalog_does_not_enable_market_pages(tmp_path):
     with pytest.raises(ValueError, match="selected catalogue"):
         configure_market_pages(tmp_path / "server", True, catalog_root=str(tmp_path))
+
+
+def test_local_market_pages_default_to_off(tmp_path):
+    # The local stack shares production vendor quotas; page work is opt-in.
+    from tools.local_stack import DEFAULT_MARKET_PAGES
+
+    assert DEFAULT_MARKET_PAGES is False

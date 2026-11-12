@@ -4,13 +4,37 @@ backend_url = "http://localhost:9000"
 ai_url = "http://localhost:2024"
 ui_url = "http://localhost:3000"
 assistant_id = "epoch-ai"
+# EpochAI traces as agent "epoch-ai", environment "local" (EPOCH_AGENT_ENVIRONMENT).
+langsmith_project = "epoch-ai-local"
+token_env = "EPOCH_TOKEN"
+
+# The same local Backend and Portal with the licensed agent server under
+# `langgraph up` (Postgres, Redis queue, parallel runs): `local_stack --ai-runtime up`.
+# Port 2124 is for up; 2024 stays the `langgraph dev` agent.
+[local-up]
+backend_url = "http://localhost:9000"
+ai_url = "http://localhost:2124"
+ui_url = "http://localhost:3000"
+assistant_id = "epoch-ai"
+langsmith_project = "epoch-ai-local"
 token_env = "EPOCH_TOKEN"
 
 [dev]
 backend_url = "https://api.dev.epoch.trade"
-ai_url = "https://dev-server-75332ad41d165993bce742c3da685d9a.aws.us.langgraph.app"
+ai_url = "https://epoch-ai-dev-3eb842aa6b765f0fa4f972612038d4c8.aws.us.langgraph.app"
 ui_url = "https://app.dev.epoch.trade"
 assistant_id = "epoch-ai"
+token_env = "EPOCH_TOKEN"
+
+# QA from its published runtime config (app.qa.epoch.trade/epoch-runtime-config.json).
+# The agent is the release-owned staging deployment; it traces as agent
+# "epoch-ai", environment "staging".
+[qa]
+backend_url = "https://api.qa.epoch.trade"
+ai_url = "https://a-epoch-ai-staging-79e4b7d5-f030d9d740b65b41af24082880f7a58a.aws.us.langgraph.app"
+ui_url = "https://app.qa.epoch.trade"
+assistant_id = "epoch-ai"
+langsmith_project = "epoch-ai-staging"
 token_env = "EPOCH_TOKEN"
 
 # Production endpoints from the existing EpochAI/Portal deployment configuration.

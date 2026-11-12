@@ -1,0 +1,135 @@
+{
+  "passed": true,
+  "retained_relations": {
+    "history": {
+      "rows": 24,
+      "fields": 48,
+      "cells": 1152
+    },
+    "latest": {
+      "rows": 2,
+      "fields": 48,
+      "cells": 96
+    },
+    "coverage": {
+      "rows": 2,
+      "fields": 19,
+      "cells": 38
+    },
+    "weak": {
+      "rows": 6,
+      "fields": 48,
+      "cells": 288
+    },
+    "scorecard": {
+      "rows": 21,
+      "fields": 5,
+      "cells": 105
+    },
+    "score_dates": {
+      "rows": 6,
+      "fields": 4,
+      "cells": 24
+    }
+  },
+  "charts": [
+    {
+      "chart": "fcf-margin",
+      "company": "Fastenal",
+      "observations": 12,
+      "real_missing": 0,
+      "union_padding": 12
+    },
+    {
+      "chart": "fcf-margin",
+      "company": "MSC Industrial",
+      "observations": 12,
+      "real_missing": 0,
+      "union_padding": 12
+    },
+    {
+      "chart": "sales-growth",
+      "company": "Fastenal",
+      "observations": 12,
+      "real_missing": 1,
+      "union_padding": 12
+    },
+    {
+      "chart": "sales-growth",
+      "company": "MSC Industrial",
+      "observations": 12,
+      "real_missing": 1,
+      "union_padding": 12
+    },
+    {
+      "chart": "operating-margin",
+      "company": "Fastenal",
+      "observations": 12,
+      "real_missing": 0,
+      "union_padding": 12
+    },
+    {
+      "chart": "operating-margin",
+      "company": "MSC Industrial",
+      "observations": 12,
+      "real_missing": 0,
+      "union_padding": 12
+    }
+  ],
+  "grouped_tables": [
+    {
+      "table": "weak_sales",
+      "rows": 6,
+      "checked_cells": 48
+    },
+    {
+      "table": "cash_generation",
+      "rows": 24,
+      "checked_cells": 168
+    },
+    {
+      "table": "working_capital",
+      "rows": 24,
+      "checked_cells": 144
+    },
+    {
+      "table": "annual_sales",
+      "rows": 24,
+      "checked_cells": 144
+    },
+    {
+      "table": "financial_buffer",
+      "rows": 24,
+      "checked_cells": 144
+    }
+  ],
+  "scorecard_cells": 42,
+  "coverage_period_rows": 24,
+  "static_notes_unchanged": 3,
+  "llm_instructions_and_facts_unchanged": true,
+  "source_execution_id": "aba287e9-100a-4420-b796-e1986fe0da88",
+  "execution_id": "5bba8bd0-c16e-4a3f-9332-6fe7627e1030",
+  "native_input_snapshot_sha256": "23b8b79a31de09c522b0fd0bb7c132a850092d2be57623b692da5f60824c8a57",
+  "source_sha256": "cd33ecaba5c2e91180f7016d849bd7104755508204872bcb365c9fd24e925d01",
+  "provider_calls": [
+    {
+      "model": "openai.gpt-6.1-terra",
+      "reasoning_effort": "medium",
+      "wall_ms": 7914,
+      "input_tokens": 11922,
+      "output_tokens": 775,
+      "reasoning_tokens": 372,
+      "ok": true
+    },
+    {
+      "model": "openai.gpt-6.1-terra",
+      "reasoning_effort": "medium",
+      "wall_ms": 5585,
+      "input_tokens": 17031,
+      "output_tokens": 516,
+      "reasoning_tokens": 266,
+      "ok": true
+    }
+  ],
+  "broader_scenario_campaign": "not_resumed"
+}

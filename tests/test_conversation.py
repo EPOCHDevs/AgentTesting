@@ -113,6 +113,68 @@ async def ask(c, key="first", message="Compare cash generation"):
     )
 
 
+class AuthRunServer(Server):
+    """The server echoes auth config alongside the SDK's run envelope."""
+
+    def handle(self, request):
+        response = super().handle(request)
+        if "/runs" not in request.url.path:
+            return response
+        value = response.json()
+        for run in value if isinstance(value, list) else [value]:
+            if "run_id" in run:
+                run["kwargs"] = {
+                    "config": {"configurable": {"langgraph_auth_user": {
+                        "identity": "owner", "authorization": "Bearer secret-run-auth",
+                    }}},
+                    "input": {"token": 23, "authorization": "financial data"},
+                }
+        return httpx.Response(response.status_code, json=value)
+
+
+def test_all_run_evidence_boundaries_redact_server_auth(tmp_path, fake_health):
+    server = AuthRunServer()
+    first = exercise(tmp_path, server, ask)
+    def auth(row):
+        return row["kwargs"]["config"]["configurable"]["langgraph_auth_user"]
+    assert auth(first) == {"identity": "owner", "authorization": "[REDACTED]"}
+
+    # A cached receipt and history created by an older collector are sanitized
+    # when this owner next returns/archives them under its normal writer lock.
+    old = json.loads(json.dumps(first))
+    auth(old)["authorization"] = "Bearer secret-old-auth"
+    receipt_path = tmp_path / "turns/first/run.json"
+    app.save(receipt_path, old)
+    assert exercise(tmp_path, server, ask) == first
+    app.save(tmp_path / "runs.json", {
+        "captured_at": STAMP, "complete": True, "error_type": None, "runs": [old],
+    })
+    status = exercise(tmp_path, server, lambda c: c.status())
+    assert auth(status["runs"][0])["authorization"] == "[REDACTED]"
+    history = exercise(tmp_path, server, lambda c: c.all_runs())
+    assert auth(history["runs"][0])["authorization"] == "[REDACTED]"
+    exercise(tmp_path, server, lambda c: c.pull())  # includes refreshed turns/*/run.json
+    for path in [receipt_path, tmp_path / "status.json", tmp_path / "runs.json",
+                 *tmp_path.glob("run-captures/*.json")]:
+        value = json.loads(path.read_text())
+        for row in value["runs"] if "runs" in value else [value]:
+            assert auth(row) == {"identity": "owner", "authorization": "[REDACTED]"}
+            assert row["kwargs"]["input"] == {"token": 23, "authorization": "financial data"}
+        assert "secret-" not in path.read_text()
+    assert len(server.runs) == 1
+
+
+def test_lost_create_response_redacts_reconnected_run(tmp_path, fake_health):
+    server = AuthRunServer()
+    server.lose_response = True
+    with pytest.raises(httpx.ReadError):
+        exercise(tmp_path, server, ask)
+    restored = exercise(tmp_path, server, ask)
+    assert restored["kwargs"]["config"]["configurable"]["langgraph_auth_user"]["authorization"] == "[REDACTED]"
+    assert "secret-run-auth" not in (tmp_path / "turns/first/run.json").read_text()
+    assert len(server.runs) == 1
+
+
 def test_repeated_cell_does_not_submit_and_followup_keeps_thread(tmp_path, fake_health):
     server = Server()
     first = exercise(tmp_path, server, ask)
@@ -589,11 +651,11 @@ def test_profiles_default_to_dev_and_require_an_explicit_existing_profile(tmp_pa
     assert local.backend_url == "http://127.0.0.1:19048"
     with pytest.raises(ValueError, match="No \\[dev\\] profile"):
         app.Stack.load(custom)
-    with pytest.raises(ValueError, match="Choose local, dev or prod"):
+    with pytest.raises(ValueError, match="Choose local, local-up, dev, qa or prod"):
         app.Stack.load(custom, "typo")
 
 
-@pytest.mark.parametrize("environment", ["dev", "prod"])
+@pytest.mark.parametrize("environment", ["dev", "qa", "prod"])
 def test_hosted_profiles_require_https(tmp_path, environment):
     config = tmp_path / "config.toml"
     config.write_text(
@@ -603,7 +665,7 @@ def test_hosted_profiles_require_https(tmp_path, environment):
         app.Stack.load(config, environment)
 
 
-@pytest.mark.parametrize("environment", ["local", "dev", "prod"])
+@pytest.mark.parametrize("environment", ["local", "dev", "qa", "prod"])
 def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment):
     config_path = app.ROOT / "environments.toml"
     config = app.Stack.load(config_path, environment)
@@ -629,6 +691,10 @@ def test_cli_routes_only_to_selected_profile(tmp_path, monkeypatch, environment)
         if request.url.path == "/api/v1/health":
             assert request.url.netloc == httpx.URL(config.backend_url).netloc
             return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/api/v1/execution-extensions/commentary-policy":
+            assert request.url.netloc == httpx.URL(config.ai_url).netloc
+            assert request.headers["Authorization"] == "Bearer test-only"
+            return httpx.Response(200, json={"model_policy": "execution_commentary.v1"})
         if str(request.url).rstrip("/") == config.ui_url.rstrip("/"):
             assert "authorization" not in request.headers
             return httpx.Response(200, text="UI")
@@ -777,21 +843,26 @@ def test_resumable_stream_keeps_cursor_and_does_not_cancel_server(
 
 
 @pytest.mark.parametrize(
-    "ready,backend,status,passes",
+    "ready,backend,status,commentary_status,passes",
     [
-        (True, CONFIG.backend_url, "healthy", True),
-        (False, CONFIG.backend_url, "healthy", False),
-        (True, "https://wrong.example", "healthy", False),
-        (True, CONFIG.backend_url, "misconfigured", False),
+        (True, CONFIG.backend_url, "healthy", 200, True),
+        (False, CONFIG.backend_url, "healthy", 200, False),
+        (True, "https://wrong.example", "healthy", 200, False),
+        (True, CONFIG.backend_url, "misconfigured", 200, False),
+        (True, CONFIG.backend_url, "healthy", 503, False),
     ],
 )
 def test_readiness_checks_service_identity_and_ui_has_no_token(
-    monkeypatch, ready, backend, status, passes
+    monkeypatch, ready, backend, status, commentary_status, passes
 ):
     captured = []
 
     def handle(request):
         captured.append(request)
+        if request.url.path == "/api/v1/execution-extensions/commentary-policy":
+            assert request.url.host == "ai.dev.example"
+            assert request.headers["Authorization"] == "Bearer test-only"
+            return httpx.Response(commentary_status, json={"model_policy": "execution_commentary.v1"})
         if request.url.host == "ai.dev.example":
             return httpx.Response(
                 200,
@@ -821,3 +892,10 @@ def test_readiness_checks_service_identity_and_ui_has_no_token(
         "authorization"
         not in next(r for r in captured if r.url.host == "ui.dev.example").headers
     )
+
+
+def test_profiles_name_their_trace_project_only_when_verified():
+    path = app.ROOT / "environments.toml"
+    assert app.Stack.load(path, "local").langsmith_project == "epoch-ai-local"
+    assert app.Stack.load(path, "qa").langsmith_project == "epoch-ai-staging"
+    assert app.Stack.load(path, "dev").langsmith_project is None

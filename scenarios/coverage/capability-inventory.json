@@ -1,0 +1,1969 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-27",
+  "purpose": "Source inventory and planned ownership, not deployed capability or acceptance certification. Metadata includes implementation helpers and presentation definitions. Registry exposure and exact option coverage must be verified on the release candidate.",
+  "backend_revision": "afe645191293f3345ce6bd9d19dec338460abee6",
+  "other_revisions": {
+    "EpochAI": "9c8342b7b399b3d28ee096a769018f2539ddbf81",
+    "EpochClientPortal": "0c56b9bc5f3ccb8a2c7d4753198abda72c96249f",
+    "AgentTesting_base": "ba7a860d160e9aa98634b5972f6d4ad03c2ab365"
+  },
+  "collection_rule": "Tracked core/metadata/macros/*.json and transforms/packages/*/{metadata/*.json,skills/*.md} at backend_revision. Exclude package metadata index.json. Every discovered macro/package group has case ownership; this does not assert method/option acceptance.",
+  "summary": {
+    "workflow_families": 14,
+    "workflow_cases": 90,
+    "cases_by_phase": {
+      "P1": 37,
+      "P2": 37,
+      "P3": 16
+    },
+    "core_macros": 46,
+    "package_groups": 37,
+    "package_metadata_entries": 507
+  },
+  "packages": {
+    "bars": {
+      "metadata_entries": [
+        "bar"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/bars/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/bars/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/bars",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "builtins": {
+      "metadata_entries": [
+        "_overlay",
+        "abandoned_baby_bear",
+        "abandoned_baby_bull",
+        "abs",
+        "acceleration_bands",
+        "acos",
+        "ad",
+        "add",
+        "adosc",
+        "adx",
+        "adxr",
+        "alligator",
+        "alma",
+        "ao",
+        "apo",
+        "aroon",
+        "aroonosc",
+        "asin",
+        "assert_unique_impl",
+        "asset_spec",
+        "atan",
+        "atr",
+        "avgprice",
+        "bar_gap",
+        "barssince",
+        "basic_volatility",
+        "bband_percent",
+        "bband_width",
+        "bbands",
+        "beta",
+        "big_black_candle",
+        "big_white_candle",
+        "black_marubozu",
+        "boolean_select_boolean",
+        "boolean_select_number",
+        "boolean_select_string",
+        "boolean_select_timestamp",
+        "bop",
+        "broadcast_by",
+        "broadcast_by_integer",
+        "calendar_label",
+        "calendar_shift",
+        "calendar_shift_boolean",
+        "calendar_shift_string",
+        "calendar_shift_timestamp",
+        "carry_by",
+        "carry_by_boolean",
+        "carry_by_number",
+        "carry_by_string",
+        "carry_by_timestamp",
+        "cci",
+        "ceil",
+        "cmo",
+        "conditional_select_boolean",
+        "conditional_select_number",
+        "conditional_select_string",
+        "conditional_select_timestamp",
+        "corr",
+        "cos",
+        "cosh",
+        "cov",
+        "crossany",
+        "crossover",
+        "crossunder",
+        "cs_agg",
+        "cs_agg_boolean",
+        "cs_agg_decimal",
+        "cs_agg_integer",
+        "cs_agg_number",
+        "cs_agg_string",
+        "cs_agg_timestamp",
+        "cs_beta",
+        "cs_corr",
+        "cs_cov",
+        "cs_group_by",
+        "cs_linear_fit",
+        "cs_momentum",
+        "cs_multi_linear_fit",
+        "cs_pairwise_metric",
+        "cs_pairwise_series_metric",
+        "cs_pivot_wider",
+        "cs_quantile",
+        "cs_rank",
+        "cs_rank_quantile",
+        "cs_select",
+        "cs_sql_impl",
+        "cs_weighted_mean",
+        "cs_winsorize",
+        "cs_zscore",
+        "cumulative",
+        "cumulative_boolean",
+        "cumulative_decimal",
+        "cumulative_integer",
+        "cumulative_number",
+        "cumulative_string",
+        "cumulative_timestamp",
+        "cvi",
+        "date_scalar",
+        "datetime_diff",
+        "datetime_extract",
+        "decay",
+        "decluster",
+        "dedupe_impl",
+        "dema",
+        "di",
+        "div",
+        "dm",
+        "doji",
+        "donchian_channel",
+        "downsample",
+        "downsample_boolean",
+        "downsample_number",
+        "downsample_string",
+        "downsample_timestamp",
+        "dpo",
+        "dragonfly_doji",
+        "dx",
+        "edecay",
+        "ema",
+        "emv",
+        "engulfing_bear",
+        "engulfing_bull",
+        "eq",
+        "evening_doji_star",
+        "evening_star",
+        "ewm_corr",
+        "ewm_cov",
+        "execution_bars_impl",
+        "exp",
+        "falling",
+        "ffill",
+        "ffill_boolean",
+        "ffill_number",
+        "ffill_string",
+        "ffill_timestamp",
+        "first_non_null_boolean",
+        "first_non_null_number",
+        "first_non_null_string",
+        "first_non_null_timestamp",
+        "fisher",
+        "floor",
+        "floor_day",
+        "forward_returns",
+        "fosc",
+        "four_price_doji",
+        "frac_diff",
+        "futures_tick_size",
+        "gravestone_doji",
+        "grid_projection",
+        "grid_projection_tuple_any",
+        "grid_union_tuple_any",
+        "group_by",
+        "group_by_boolean",
+        "group_by_number",
+        "group_by_string",
+        "group_by_timestamp",
+        "group_collect",
+        "group_map_collect",
+        "group_map_collect_integer",
+        "gt",
+        "gte",
+        "half_life_ar1",
+        "hammer",
+        "hanging_man",
+        "hma",
+        "hold_until",
+        "hurst_exponent",
+        "ichimoku",
+        "index_of",
+        "intraday_returns",
+        "inverted_hammer",
+        "is_asset_ref",
+        "is_finite",
+        "is_index_member_impl",
+        "is_inf",
+        "is_leap_year",
+        "is_nan",
+        "is_null",
+        "is_valid",
+        "kama",
+        "keltner_channels",
+        "kvo",
+        "lag",
+        "lag_boolean",
+        "lag_number",
+        "lag_string",
+        "lag_timestamp",
+        "linreg",
+        "linregintercept",
+        "linregslope",
+        "ln",
+        "log10",
+        "logical_and",
+        "logical_and_not",
+        "logical_not",
+        "logical_or",
+        "logical_xor",
+        "long_legged_doji",
+        "lt",
+        "lte",
+        "ma",
+        "macd",
+        "marketfi",
+        "marubozu",
+        "mass",
+        "md",
+        "medprice",
+        "mfi",
+        "modulo",
+        "mom",
+        "morning_doji_star",
+        "morning_star",
+        "msw",
+        "mul",
+        "natr",
+        "neq",
+        "nlargest",
+        "nsmallest",
+        "number",
+        "nvi",
+        "obv",
+        "pairwise_metric",
+        "pairwise_series_metric",
+        "percentile_select_boolean",
+        "percentile_select_number",
+        "percentile_select_string",
+        "percentile_select_timestamp",
+        "pivot_longer_columns",
+        "pivot_longer_rows",
+        "pivot_point_sr",
+        "pivot_wider",
+        "power_op",
+        "ppo",
+        "price_distance",
+        "psar",
+        "psl",
+        "pvi",
+        "qstick",
+        "returns",
+        "rising",
+        "roc",
+        "rocr",
+        "rolling_agg",
+        "rolling_agg_boolean",
+        "rolling_agg_decimal",
+        "rolling_agg_integer",
+        "rolling_agg_number",
+        "rolling_agg_string",
+        "rolling_agg_timestamp",
+        "round",
+        "rsi",
+        "scalar_agg",
+        "scalar_agg_boolean",
+        "scalar_agg_decimal",
+        "scalar_agg_integer",
+        "scalar_agg_number",
+        "scalar_agg_string",
+        "scalar_agg_timestamp",
+        "shooting_star",
+        "sin",
+        "sinh",
+        "sma",
+        "spinning_top",
+        "sql_impl",
+        "sql_program_impl",
+        "sqrt",
+        "star",
+        "static_cast_to_boolean",
+        "static_cast_to_decimal",
+        "static_cast_to_integer",
+        "static_cast_to_string",
+        "static_cast_to_timestamp",
+        "stderr",
+        "stoch",
+        "stochrsi",
+        "str",
+        "streak_length",
+        "string_concat",
+        "sub",
+        "supertrend",
+        "switch_boolean",
+        "switch_number",
+        "switch_string",
+        "switch_timestamp",
+        "swma",
+        "tan",
+        "tanh",
+        "tema",
+        "text",
+        "three_black_crows",
+        "three_white_soldiers",
+        "timestamp_scalar",
+        "to_timestamp",
+        "todeg",
+        "torad",
+        "tr",
+        "trima",
+        "trix",
+        "trunc",
+        "tsf",
+        "tuple_expand",
+        "tuple_index",
+        "tuple_index_bool",
+        "tuple_index_integer",
+        "tuple_index_string",
+        "tuple_index_timestamp",
+        "tuple_pack",
+        "typprice",
+        "ulcer_index",
+        "ultosc",
+        "upsample",
+        "upsample_boolean",
+        "upsample_by_interpolate",
+        "upsample_number",
+        "upsample_string",
+        "upsample_timestamp",
+        "valuewhen_boolean",
+        "valuewhen_number",
+        "valuewhen_string",
+        "valuewhen_timestamp",
+        "vhf",
+        "vidya",
+        "volatility",
+        "vortex",
+        "vosc",
+        "vwma",
+        "wad",
+        "wcprice",
+        "where_boolean",
+        "where_integer",
+        "where_number",
+        "where_string",
+        "where_timestamp",
+        "white_marubozu",
+        "wilders",
+        "willr",
+        "wma",
+        "zlema"
+      ],
+      "skill_paths": [],
+      "case_ids": [
+        "UN01",
+        "TH01",
+        "FE01",
+        "FE02",
+        "ST01",
+        "UX02"
+      ],
+      "families": [
+        "FE",
+        "ST",
+        "TH",
+        "UN",
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/builtins",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "calendar_effects": {
+      "metadata_entries": [
+        "holiday",
+        "is_period_boundary",
+        "turn_of_month"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/calendar_effects/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/calendar_effects/skills/detailed.md"
+      ],
+      "case_ids": [
+        "ST05",
+        "IN03"
+      ],
+      "families": [
+        "IN",
+        "ST"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/calendar_effects",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "cards": {
+      "metadata_entries": [
+        "card",
+        "category_header",
+        "executive_summary",
+        "gauge",
+        "graph",
+        "graph_nodes",
+        "markdown",
+        "pie",
+        "radar",
+        "snapshot_card",
+        "treemap"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/cards/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/cards/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/cards",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "change_point_detection": {
+      "metadata_entries": [
+        "cusum"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/change_point_detection/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/change_point_detection/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE04"
+      ],
+      "families": [
+        "FE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/change_point_detection",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "cointegration_tests": {
+      "metadata_entries": [
+        "adf",
+        "engle_granger",
+        "johansen"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/cointegration_tests/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/cointegration_tests/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE03"
+      ],
+      "families": [
+        "FE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/cointegration_tests",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "corporate_actions": {
+      "metadata_entries": [
+        "dividends",
+        "dividends_calendar",
+        "earnings",
+        "earnings_calendar",
+        "ipo_calendar",
+        "ipo_prospectus",
+        "splits",
+        "splits_calendar"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/corporate_actions/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/corporate_actions/skills/detailed.md"
+      ],
+      "case_ids": [
+        "CO02",
+        "CO03",
+        "CO05"
+      ],
+      "families": [
+        "CO"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/corporate_actions",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "dimensionality_reduction": {
+      "metadata_entries": [
+        "pca"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/dimensionality_reduction/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/dimensionality_reduction/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE01",
+        "RE06"
+      ],
+      "families": [
+        "FE",
+        "RE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/dimensionality_reduction",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "distributions": {
+      "metadata_entries": [
+        "boxplot",
+        "histogram"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/distributions/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/distributions/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX08",
+        "VA02"
+      ],
+      "families": [
+        "UX",
+        "VA"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/distributions",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "event_markers": {
+      "metadata_entries": [
+        "cs_event_marker",
+        "event_marker"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/event_markers/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/event_markers/skills/detailed.md"
+      ],
+      "case_ids": [
+        "CO02",
+        "UX08"
+      ],
+      "families": [
+        "CO",
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/event_markers",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "exit_rules": {
+      "metadata_entries": [
+        "chande_kroll_stop",
+        "chandelier_exit",
+        "stop_loss",
+        "take_profit",
+        "time_exit",
+        "trailing_stop"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/exit_rules/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/exit_rules/skills/detailed.md"
+      ],
+      "case_ids": [
+        "ST02",
+        "ST06",
+        "IN01"
+      ],
+      "families": [
+        "IN",
+        "ST"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/exit_rules",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "factor_regression": {
+      "metadata_entries": [
+        "cs_factor_analysis",
+        "linear_fit",
+        "multi_linear_fit"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/factor_regression/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/factor_regression/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE02",
+        "UN02",
+        "UN09"
+      ],
+      "families": [
+        "FE",
+        "UN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/factor_regression",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "feature_scaling": {
+      "metadata_entries": [
+        "ml_minmax",
+        "ml_robust",
+        "ml_zscore"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/feature_scaling/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/feature_scaling/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE01",
+        "FE05"
+      ],
+      "families": [
+        "FE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/feature_scaling",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "financial_metrics": {
+      "metadata_entries": [
+        "enterprise_values",
+        "etf_holdings_impl",
+        "etf_info_impl",
+        "historical_employee_count",
+        "historical_market_cap",
+        "key_metrics",
+        "owner_earnings",
+        "ratios"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/financial_metrics/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/financial_metrics/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UN01",
+        "UN02",
+        "UN04",
+        "UN05",
+        "UN08",
+        "CO04"
+      ],
+      "families": [
+        "CO",
+        "UN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/financial_metrics",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "financial_statements": {
+      "metadata_entries": [
+        "balance_sheet",
+        "balance_sheet_growth",
+        "cash_flow",
+        "cash_flow_growth",
+        "financial_growth",
+        "income_statement",
+        "income_statement_growth",
+        "revenue_geographic_segmentation",
+        "revenue_product_segmentation"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/financial_statements/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/financial_statements/skills/detailed.md"
+      ],
+      "case_ids": [
+        "CO01",
+        "CO06",
+        "UN03",
+        "UN04",
+        "UN06"
+      ],
+      "families": [
+        "CO",
+        "UN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/financial_statements",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "futures_continuation": {
+      "metadata_entries": [
+        "continuous_term_structure"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/futures_continuation/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/futures_continuation/skills/detailed.md"
+      ],
+      "case_ids": [
+        "XA01",
+        "XA04"
+      ],
+      "families": [
+        "XA"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/futures_continuation",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "heatmaps": {
+      "metadata_entries": [
+        "heatmap"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/heatmaps/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/heatmaps/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/heatmaps",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "inline_l3": {
+      "metadata_entries": [
+        "align",
+        "broadcast_onto",
+        "broadcast_onto_date",
+        "clip_window",
+        "clip_window_integer",
+        "custom_data",
+        "dataframe",
+        "grid_union",
+        "merge_asof",
+        "series",
+        "series_integer"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/inline_l3/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/inline_l3/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE01",
+        "UN06",
+        "MA02",
+        "BY02"
+      ],
+      "families": [
+        "BY",
+        "FE",
+        "MA",
+        "UN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/inline_l3",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "intraday_sessions": {
+      "metadata_entries": [
+        "session_clock",
+        "session_gap",
+        "session_window"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/intraday_sessions/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/intraday_sessions/skills/detailed.md"
+      ],
+      "case_ids": [
+        "IN01",
+        "IN02",
+        "IN03"
+      ],
+      "families": [
+        "IN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/intraday_sessions",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "lines": {
+      "metadata_entries": [
+        "line"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/lines/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/lines/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/lines",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "macroeconomics": {
+      "metadata_entries": [
+        "mb_data_impl",
+        "mb_release_schedule_impl",
+        "mb_revision_tape_impl",
+        "mb_vintage_data_impl",
+        "te_calendar_all_impl",
+        "te_calendar_impl",
+        "te_forecast_impl",
+        "te_market_forecast_impl",
+        "te_markets_impl",
+        "te_rating_impl",
+        "te_series_impl"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/macroeconomics/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/macroeconomics/skills/detailed.md"
+      ],
+      "case_ids": [
+        "MA01",
+        "MA02",
+        "MA03",
+        "MA04",
+        "MA05",
+        "MA06",
+        "MA07",
+        "IN02"
+      ],
+      "families": [
+        "IN",
+        "MA"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/macroeconomics",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "market_data": {
+      "metadata_entries": [
+        "asset_catalog_impl",
+        "crypto_pairs",
+        "extended_market_data_source",
+        "futures_contracts_source",
+        "fx_pairs",
+        "market_data_source",
+        "reference_futures",
+        "reference_stocks"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/market_data/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/market_data/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UN01",
+        "UN07",
+        "UN08",
+        "XA01",
+        "XA02",
+        "XA03",
+        "IN03"
+      ],
+      "families": [
+        "IN",
+        "UN",
+        "XA"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/market_data",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "momentum_oscillators": {
+      "metadata_entries": [
+        "cog",
+        "qqe",
+        "rci",
+        "tsi"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/momentum_oscillators/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/momentum_oscillators/skills/detailed.md"
+      ],
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/momentum_oscillators",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "nlp": {
+      "metadata_entries": [
+        "keyword_count",
+        "keyword_match",
+        "keyword_score",
+        "string_case",
+        "string_check",
+        "string_contains",
+        "string_trim",
+        "topic_classify"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/nlp/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/nlp/skills/detailed.md"
+      ],
+      "case_ids": [
+        "BY03"
+      ],
+      "families": [
+        "BY"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/nlp",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "portfolio_allocation": {
+      "metadata_entries": [
+        "black_litterman",
+        "equal_weight",
+        "herc",
+        "hrp",
+        "inv_vol_weight",
+        "max_diversification",
+        "max_sharpe",
+        "min_cvar",
+        "min_semivariance",
+        "min_variance",
+        "risk_budgeting",
+        "risk_parity"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/portfolio_allocation/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/portfolio_allocation/skills/detailed.md"
+      ],
+      "case_ids": [
+        "PO01",
+        "PO02",
+        "PO03",
+        "PO04",
+        "PO05"
+      ],
+      "families": [
+        "PO"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/portfolio_allocation",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "position_sizing": {
+      "metadata_entries": [
+        "cppi",
+        "drawdown_allocation",
+        "exposure_cap",
+        "kelly",
+        "optimal_f",
+        "position_size",
+        "risk_unit",
+        "tipp"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/position_sizing/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/position_sizing/skills/detailed.md"
+      ],
+      "case_ids": [
+        "ST07",
+        "PO01",
+        "IN06"
+      ],
+      "families": [
+        "IN",
+        "PO",
+        "ST"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/position_sizing",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "price_profile": {
+      "metadata_entries": [
+        "price_profile"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/price_profile/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/price_profile/skills/detailed.md"
+      ],
+      "case_ids": [
+        "IN04"
+      ],
+      "families": [
+        "IN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/price_profile",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "regime_detection": {
+      "metadata_entries": [
+        "dbscan",
+        "hmm",
+        "hmm_fit",
+        "hmm_forecast",
+        "hmm_infer",
+        "hmm_predictive_score",
+        "hmm_smooth",
+        "kmeans"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/regime_detection/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/regime_detection/skills/detailed.md"
+      ],
+      "case_ids": [
+        "RE01",
+        "RE02",
+        "RE03",
+        "RE04",
+        "RE05",
+        "RE06",
+        "RE07"
+      ],
+      "families": [
+        "RE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/regime_detection",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "reporters_shared": {
+      "metadata_entries": [],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/reporters_shared/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/reporters_shared/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/reporters_shared",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "scatter": {
+      "metadata_entries": [
+        "scatter"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/scatter/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/scatter/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE02",
+        "UX08"
+      ],
+      "families": [
+        "FE",
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/scatter",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "sessions": {
+      "metadata_entries": [
+        "day_of_week",
+        "month_of_year",
+        "quarter",
+        "week_of_month"
+      ],
+      "skill_paths": [],
+      "case_ids": [
+        "ST05",
+        "IN04"
+      ],
+      "families": [
+        "IN",
+        "ST"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/sessions",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "signal_execution": {
+      "metadata_entries": [
+        "entry_order",
+        "long_and_short_zone",
+        "pyramiding",
+        "roll_at_open",
+        "strategy_benchmark"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/signal_execution/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/signal_execution/skills/detailed.md"
+      ],
+      "case_ids": [
+        "ST01",
+        "ST02",
+        "ST03",
+        "ST04",
+        "ST05",
+        "ST06",
+        "XA06",
+        "VA01"
+      ],
+      "families": [
+        "ST",
+        "VA",
+        "XA"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/signal_execution",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "smc": {
+      "metadata_entries": [
+        "bos_choch",
+        "fair_value_gap",
+        "liquidity",
+        "order_blocks",
+        "previous_high_low",
+        "retracements",
+        "swing_highs_lows"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/smc/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/smc/skills/detailed.md"
+      ],
+      "case_ids": [
+        "IN05"
+      ],
+      "families": [
+        "IN"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/smc",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "state_space_filters": {
+      "metadata_entries": [
+        "kalman_filter"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/state_space_filters/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/state_space_filters/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FE04"
+      ],
+      "families": [
+        "FE"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/state_space_filters",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "tables": {
+      "metadata_entries": [
+        "table"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/tables/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/tables/skills/detailed.md"
+      ],
+      "case_ids": [
+        "UX02",
+        "UX08"
+      ],
+      "families": [
+        "UX"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/tables",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "time_series_forecasting": {
+      "metadata_entries": [
+        "arima_fit",
+        "arima_forecast",
+        "arima_forecast_from_fit",
+        "arima_infer",
+        "garch_fit",
+        "garch_forecast",
+        "garch_forecast_from_fit",
+        "garch_infer",
+        "rolling_arima",
+        "rolling_garch"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/time_series_forecasting/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/time_series_forecasting/skills/detailed.md"
+      ],
+      "case_ids": [
+        "FC01",
+        "FC02",
+        "FC03",
+        "FC04",
+        "FC05",
+        "FC06",
+        "FC07",
+        "FC08"
+      ],
+      "families": [
+        "FC"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/time_series_forecasting",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    "volatility_estimators": {
+      "metadata_entries": [
+        "elders_thermometer",
+        "volatility_estimator"
+      ],
+      "skill_paths": [
+        "packages/epoch-script/src/transforms/packages/volatility_estimators/skills/compact.md",
+        "packages/epoch-script/src/transforms/packages/volatility_estimators/skills/detailed.md"
+      ],
+      "case_ids": [
+        "TH01",
+        "FC02",
+        "IN04"
+      ],
+      "families": [
+        "FC",
+        "IN",
+        "TH"
+      ],
+      "source_directory": "packages/epoch-script/src/transforms/packages/volatility_estimators",
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    }
+  },
+  "core_macros": [
+    {
+      "name": "acceleration_bands",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/acceleration_bands.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "alligator",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/alligator.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "aroon",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/aroon.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "asset_catalog",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/asset_catalog.json",
+      "case_ids": [
+        "UN01",
+        "UN08"
+      ],
+      "families": [
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "bar_gap",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/bar_gap.json",
+      "case_ids": [
+        "TH04",
+        "XA05"
+      ],
+      "families": [
+        "TH",
+        "XA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "bbands",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/bbands.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "calendar_label",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/calendar_label.json",
+      "case_ids": [
+        "ST05",
+        "IN04"
+      ],
+      "families": [
+        "IN",
+        "ST"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "candlestick_pattern",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/candlestick_pattern.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "di",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/di.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "dm",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/dm.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "donchian_channel",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/donchian_channel.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "etf_holdings",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/etf_holdings.json",
+      "case_ids": [
+        "CO04"
+      ],
+      "families": [
+        "CO"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "etf_info",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/etf_info.json",
+      "case_ids": [
+        "CO04"
+      ],
+      "families": [
+        "CO"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "fisher",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/fisher.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "futures_contracts",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/futures_contracts.json",
+      "case_ids": [
+        "XA01",
+        "XA04"
+      ],
+      "families": [
+        "XA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "half_life_ar1",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/half_life_ar1.json",
+      "case_ids": [
+        "FE03"
+      ],
+      "families": [
+        "FE"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "ichimoku",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/ichimoku.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "is_study_asset",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/is_study_asset.json",
+      "case_ids": [
+        "UN01",
+        "TH02"
+      ],
+      "families": [
+        "TH",
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "keltner_channels",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/keltner_channels.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "linear_fit",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/linear_fit.json",
+      "case_ids": [
+        "FE02"
+      ],
+      "families": [
+        "FE"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "macd",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/macd.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "mb_data",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/mb_data.json",
+      "case_ids": [
+        "MA01",
+        "MA04"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "mb_release_schedule",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/mb_release_schedule.json",
+      "case_ids": [
+        "MA02",
+        "UX03"
+      ],
+      "families": [
+        "MA",
+        "UX"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "mb_revision_tape",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/mb_revision_tape.json",
+      "case_ids": [
+        "MA02"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "mb_vintage_data",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/mb_vintage_data.json",
+      "case_ids": [
+        "MA02"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "msw",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/msw.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "multi_linear_fit",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/multi_linear_fit.json",
+      "case_ids": [
+        "FE02"
+      ],
+      "families": [
+        "FE"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "pair_stat",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/pair_stat.json",
+      "case_ids": [
+        "FE03",
+        "FE02"
+      ],
+      "families": [
+        "FE"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "pivot_point_sr",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/pivot_point_sr.json",
+      "case_ids": [
+        "IN04",
+        "TH04"
+      ],
+      "families": [
+        "IN",
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "reference_assets",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/reference_assets.json",
+      "case_ids": [
+        "XA01",
+        "XA02",
+        "XA03"
+      ],
+      "families": [
+        "XA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "resample",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/resample.json",
+      "case_ids": [
+        "TH05",
+        "IN03"
+      ],
+      "families": [
+        "IN",
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "select",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/select.json",
+      "case_ids": [
+        "UN01",
+        "TH02"
+      ],
+      "families": [
+        "TH",
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "sql",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/sql.json",
+      "case_ids": [
+        "FE01",
+        "UN06",
+        "MA02"
+      ],
+      "families": [
+        "FE",
+        "MA",
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "stoch",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/stoch.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "study_asset_values",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/study_asset_values.json",
+      "case_ids": [
+        "UN01",
+        "TH01"
+      ],
+      "families": [
+        "TH",
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "study_assets",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/study_assets.json",
+      "case_ids": [
+        "UN01",
+        "TH01",
+        "IN01"
+      ],
+      "families": [
+        "IN",
+        "TH",
+        "UN"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "supertrend",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/supertrend.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_calendar",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_calendar.json",
+      "case_ids": [
+        "MA01",
+        "IN02"
+      ],
+      "families": [
+        "IN",
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_calendar_all",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_calendar_all.json",
+      "case_ids": [
+        "MA01",
+        "UX03"
+      ],
+      "families": [
+        "MA",
+        "UX"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_forecast",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_forecast.json",
+      "case_ids": [
+        "MA07"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_index",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_index.json",
+      "case_ids": [
+        "MA03",
+        "XA02"
+      ],
+      "families": [
+        "MA",
+        "XA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_market_forecast",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_market_forecast.json",
+      "case_ids": [
+        "MA07"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_rating",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_rating.json",
+      "case_ids": [
+        "MA06"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "te_series",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/te_series.json",
+      "case_ids": [
+        "MA04",
+        "MA06"
+      ],
+      "families": [
+        "MA"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "volatility",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/volatility.json",
+      "case_ids": [
+        "TH01",
+        "FC02"
+      ],
+      "families": [
+        "FC",
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "vortex",
+      "source_path": "packages/epoch-script/src/core/metadata/macros/vortex.json",
+      "case_ids": [
+        "TH01",
+        "TH04"
+      ],
+      "families": [
+        "TH"
+      ],
+      "acceptance": "not_run",
+      "registry_exposure": "verify_on_candidate"
+    }
+  ],
+  "service_surfaces": [
+    {
+      "name": "full_universe_and_current_cap",
+      "case_ids": [
+        "UN01",
+        "UN07",
+        "UN08",
+        "UX06"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/services/asset_screening_service.cpp",
+        "services/stratifyx/src/controller/services/discovery_source_service.cpp"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "files_imports_datasets",
+      "case_ids": [
+        "BY01",
+        "BY02",
+        "BY03",
+        "UX05"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/files.h"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "portfolio_snapshots",
+      "case_ids": [
+        "PO06"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/portfolio_snapshots.h"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "context_publication_and_presentation",
+      "case_ids": [
+        "UX02",
+        "UX03",
+        "UX07",
+        "UX08"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/contexts.h",
+        "services/stratifyx/src/controller/http/market_intelligence.cpp"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "context_shares",
+      "case_ids": [
+        "UX05"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/context_shares.cpp"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "execution_and_archive",
+      "case_ids": [
+        "UX04",
+        "UX07",
+        "BY01",
+        "VA01",
+        "VA02",
+        "VA03"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/studies.cpp",
+        "services/stratifyx/src/controller/http/execution_archive.cpp"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    },
+    {
+      "name": "reference_library",
+      "case_ids": [
+        "RE02",
+        "FC07",
+        "BY01"
+      ],
+      "source_paths": [
+        "services/stratifyx/src/controller/http/reference_library.cpp"
+      ],
+      "acceptance": "not_run",
+      "channel_exposure": "verify_on_candidate"
+    }
+  ]
+}
