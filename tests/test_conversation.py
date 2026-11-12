@@ -899,3 +899,34 @@ def test_profiles_name_their_trace_project_only_when_verified():
     assert app.Stack.load(path, "local").langsmith_project == "epoch-ai-local"
     assert app.Stack.load(path, "qa").langsmith_project == "epoch-ai-staging"
     assert app.Stack.load(path, "dev").langsmith_project is None
+
+
+@pytest.mark.parametrize(
+    "reported,passes",
+    [
+        ("http://host.docker.internal:9000", True),
+        ("http://localhost:9000", False),
+        ("http://host.docker.internal:9001", False),
+    ],
+)
+def test_up_agent_reports_the_backend_as_its_container_reaches_it(monkeypatch, reported, passes):
+    up = app.Stack.load(app.ROOT / "environments.toml", "local-up")
+    assert up.agent_backend_url() == "http://host.docker.internal:9000"
+    assert app.Stack.load(app.ROOT / "environments.toml", "local").agent_backend_url() == "http://localhost:9000"
+
+    def handle(request):
+        if request.url.path == "/api/v1/execution-extensions/commentary-policy":
+            return httpx.Response(200, json={"model_policy": "execution_commentary.v1"})
+        if request.url.port == 2124:
+            return httpx.Response(200, json={"status": "healthy", "build_study": {"ready": True, "backend_url": reported}})
+        if request.url.port == 9000:
+            return httpx.Response(200, json={"status": "ok", "git_sha": "backend-sha"})
+        return httpx.Response(200, text="<html>UI</html>")
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(app.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handle), **kw))
+    if passes:
+        assert asyncio.run(app.check_stack(up, "Bearer test-only"))["backend"]["git_sha"] == "backend-sha"
+    else:
+        with pytest.raises(RuntimeError, match="different Backend"):
+            asyncio.run(app.check_stack(up, "Bearer test-only"))

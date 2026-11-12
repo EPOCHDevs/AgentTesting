@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 from dotenv import dotenv_values
 
-from tools.agent_testing import Stack, check_stack
+from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
 from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -205,7 +205,6 @@ UP_CONFIG, UP_ENV, UP_COMPOSE = (
     ".env.up.local",
     "docker-compose.up.local.yml",
 )
-CONTAINER_HOST = "host.docker.internal"
 CONTAINER_PORT = 8000  # langgraph-api's port inside its container
 
 

@@ -38,6 +38,8 @@ Environment = Literal["local", "local-up", "dev", "qa", "prod"]
 # Stacks on this machine: the launcher's agent under `langgraph dev` (local)
 # or the licensed server under `langgraph up` (local-up). Both share local sign-in.
 LOCAL_ENVIRONMENTS = ("local", "local-up")
+# The up agent runs in a container and reaches the host Backend through this name.
+CONTAINER_HOST = "host.docker.internal"
 
 
 class ServiceIdentity(TypedDict):
@@ -183,6 +185,13 @@ class Stack:
     def is_local(self) -> bool:
         return self.environment in LOCAL_ENVIRONMENTS
 
+    def agent_backend_url(self) -> str:
+        """The Backend URL as the agent itself addresses it."""
+        if self.environment != "local-up":
+            return self.backend_url
+        parts = urlsplit(self.backend_url)
+        return parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
+
     def login_path(self) -> Path:
         # Hosted logins are cached per Portal host, so one never reaches another stack.
         if self.is_local:
@@ -292,7 +301,7 @@ async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
         raise RuntimeError(
             f"{config.environment} AI is not ready; inspect its /health/custom response."
         )
-    if build.get("backend_url", "").rstrip("/") != config.backend_url.rstrip("/"):
+    if build.get("backend_url", "").rstrip("/") != config.agent_backend_url().rstrip("/"):
         raise RuntimeError(
             f"{config.environment} AI reports a different Backend from AgentTesting's configured Backend."
         )
