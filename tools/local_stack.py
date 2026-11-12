@@ -5,6 +5,7 @@ import asyncio
 import fcntl
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -40,7 +41,7 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
         "ai_dir": PROJECT_ROOT / "EpochAI",
         "ui_dir": PROJECT_ROOT / "EpochClientPortal",
     }
-    unknown = set(config) - set(paths) - {"node_bin", "market_pages"}
+    unknown = set(config) - set(paths) - {"node_bin", "market_pages", "documents"}
     if unknown:
         raise ValueError(
             f"Unknown local launcher settings: {', '.join(sorted(unknown))}"
@@ -206,27 +207,125 @@ UP_CONFIG, UP_ENV, UP_COMPOSE = (
     "docker-compose.up.local.yml",
 )
 CONTAINER_PORT = 8000  # langgraph-api's port inside its container
+WORKER_TOKEN = "EPOCH_DOCUMENT_WORKER_TOKEN"
 
 
-def up_container_env(values: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+def source_access(
+    state: Path, backend_url: str, backend_values: dict[str, str], ai_values: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Enable public web research and document URL capture for a local stack.
+
+    Backend and the agent share one private worker token, kept across restarts.
+    Web research also needs Exa and a recovery journal; the agent is the single
+    executor, so a private directory serves. AWS document reading (PDF, images,
+    DOCX) stays off unless its own settings are configured."""
+    token = backend_values.get(WORKER_TOKEN) or ai_values.get(WORKER_TOKEN)
+    if not token:
+        path = state / "document-worker-token"
+        if not path.is_file():
+            write_private(path, secrets.token_urlsafe(48))
+        token = path.read_text().strip()
+    ai = {WORKER_TOKEN: token, "EPOCH_DOCUMENT_BACKEND_URL": backend_url}
+    if ai_values.get("EXA_API_KEY") and "EPOCH_WEB_RESEARCH_ENABLED" not in ai_values:
+        ai["EPOCH_WEB_RESEARCH_ENABLED"] = "true"
+        ai["EPOCH_WEB_RESEARCH_JOURNAL"] = str(private_dir(state / "ai/web-journal"))
+    # Operator settings win, except the token Backend must share.
+    return {WORKER_TOKEN: token}, {**ai, **ai_values, WORKER_TOKEN: token}
+
+
+DOCUMENT_SETTINGS = ("aws_profile", "account_id", "bucket")
+CONTAINER_AWS = "/root/.aws"  # The agent image runs as root.
+
+
+def document_access(settings: dict) -> dict[str, str]:
+    """AWS document reading (PDF, images, DOCX) through Bedrock Data Automation.
+
+    Off unless local-stack.toml has a [documents] table naming the AWS profile,
+    its account and the private us-east-1 bucket that stages documents."""
+    if not settings:
+        return {}
+    if set(settings) != set(DOCUMENT_SETTINGS):
+        raise ValueError(f"[documents] needs exactly: {', '.join(DOCUMENT_SETTINGS)}")
+    account = str(settings["account_id"])
+    return {
+        "EPOCH_DOCUMENT_PREPARATION_ENABLED": "true",
+        "EPOCH_DOCUMENT_AWS_BUCKET": settings["bucket"],
+        "EPOCH_DOCUMENT_AWS_ACCOUNT_ID": account,
+        "EPOCH_DOCUMENT_BDA_PROFILE_ARN": (
+            f"arn:aws:bedrock:us-east-1:{account}:data-automation-profile/us.data-automation-v1"
+        ),
+        "AWS_PROFILE": settings["aws_profile"],
+    }
+
+
+def check_document_access(env: dict[str, str], base: dict[str, str]) -> None:
+    """Fail before launch, as the agent refuses to start without its AWS access."""
+    if env.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") != "true":
+        return
+    profile, bucket = env["AWS_PROFILE"], env["EPOCH_DOCUMENT_AWS_BUCKET"]
+    aws = shutil.which("aws", path=base.get("PATH"))
+    if not aws:
+        raise ValueError("Document reading needs the AWS CLI to check its access.")
+
+    def call(*args: str) -> str:
+        done = subprocess.run(
+            [aws, *args, "--profile", profile, "--output", "text"],
+            env=base, capture_output=True, text=True, timeout=60,
+        )
+        if done.returncode:
+            raise ValueError(
+                f"Document reading cannot use AWS profile {profile}. "
+                f"Sign in with: aws sso login --profile {profile}"
+            )
+        return done.stdout.strip()
+
+    if call("sts", "get-caller-identity", "--query", "Account") != env["EPOCH_DOCUMENT_AWS_ACCOUNT_ID"]:
+        raise ValueError(f"AWS profile {profile} is not the configured document account.")
+    region = call(
+        "s3api", "get-bucket-location", "--bucket", bucket,
+        "--expected-bucket-owner", env["EPOCH_DOCUMENT_AWS_ACCOUNT_ID"],
+        "--query", "LocationConstraint",
+    )
+    if region not in ("None", "us-east-1"):
+        raise ValueError(f"Document bucket {bucket} is in {region}; it must be in us-east-1.")
+
+
+def aws_mounts(env: dict[str, str], base: dict[str, str]) -> list[tuple[str, str]]:
+    """The profile config and SSO sign-in cache, read-only, for document reading."""
+    if env.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") != "true":
+        return []
+    home = Path(base.get("HOME", Path.home())) / ".aws"
+    config = Path(base.get("AWS_CONFIG_FILE", home / "config"))
+    return [
+        (str(config), f"{CONTAINER_AWS}/config"),
+        (str(home / "sso/cache"), f"{CONTAINER_AWS}/sso/cache"),
+    ]
+
+
+def up_container_env(values: dict[str, str]) -> tuple[dict[str, str], list[str], list[str]]:
     """Point the agent's local env at the host from its container.
 
-    Returns the env and the host directories it names, to mount read-only."""
+    Returns the env, the host directories it names to mount read-only, and the
+    web recovery journal to mount writable."""
     env = dict(values)
+    # The document and web workers stay on their loopback origin; a relay serves it.
     for key in ("EPOCH_BACKEND_URL", "EPOCH_CAMPAIGN_SERVER"):
         parts = urlsplit(env[key])
         env[key] = parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
     for key in ("EPOCH_AI_URL", "LANGGRAPH_API_URL"):
         env[key] = f"http://localhost:{CONTAINER_PORT}"
     env.pop("POSTGRES_URI", None)  # `up` brings its own Postgres.
+    journal = env.get("EPOCH_WEB_RESEARCH_JOURNAL", "")
+    writable = [journal] if journal.startswith("/") and Path(journal).is_dir() else []
     mounts = sorted(
         {
             value
             for value in env.values()
             if value.startswith(f"{PROJECT_ROOT}/") and Path(value).is_dir()
         }
+        - set(writable)
     )
-    return env, mounts
+    return env, mounts, writable
 
 
 def env_file_text(env: dict[str, str]) -> str:
@@ -237,16 +336,46 @@ def env_file_text(env: dict[str, str]) -> str:
     return "".join(f"{key}='{value}'\n" for key, value in sorted(env.items()))
 
 
-def up_compose_override(mounts: list[str]) -> str:
+RELAY = Path(__file__).resolve().parent / "loopback_forward.py"
+
+
+def loopback_port(env: dict[str, str]) -> int | None:
+    """The Backend port the workers expect on the container's own loopback."""
+    parts = urlsplit(env.get("EPOCH_DOCUMENT_BACKEND_URL", ""))
+    if parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1"):
+        return parts.port
+    return None
+
+
+def up_compose_override(
+    mounts: list[str],
+    writable: list[str] = (),
+    image: str = "",
+    relay_port: int | None = None,
+    mapped: list[tuple[str, str]] = (),
+) -> str:
     lines = [
         "services:",
         "  langgraph-api:",
         "    extra_hosts:",
         f'      - "{CONTAINER_HOST}:host-gateway"',
     ]
-    if mounts:
+    if mounts or writable or mapped:
         lines.append("    volumes:")
         lines += [f'      - "{mount}:{mount}:ro"' for mount in mounts]
+        lines += [f'      - "{mount}:{mount}"' for mount in writable]
+        lines += [f'      - "{host}:{container}:ro"' for host, container in mapped]
+    if relay_port:
+        # Shares the agent's network, so its loopback reaches the host Backend.
+        lines += [
+            "  backend-loopback:",
+            f'    image: "{image}"',
+            '    network_mode: "service:langgraph-api"',
+            f'    entrypoint: ["python", "{RELAY}", "{relay_port}", "{CONTAINER_HOST}"]',
+            "    volumes:",
+            f'      - "{RELAY}:{RELAY}:ro"',
+            "    restart: unless-stopped",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -283,15 +412,18 @@ def prepare_up(
 ) -> tuple:
     if not shutil.which("docker", path=base.get("PATH")):
         raise ValueError("The up runtime needs Docker on PATH.")
-    env, mounts = up_container_env(values)
+    env, mounts, writable = up_container_env(values)
     graph_config = json.loads((ai / "langgraph.json").read_text())
     graph_config["env"] = UP_ENV
-    write_private(ai / UP_ENV, env_file_text(env))
-    write_private(ai / UP_CONFIG, json.dumps(graph_config, indent=2))
-    write_private(ai / UP_COMPOSE, up_compose_override(mounts))
-    exclude_locally(ai, (UP_CONFIG, UP_ENV, UP_COMPOSE))
     # One image per EpochAI commit; the default builder avoids a stale buildx one.
     image = f"epoch-ai-up:{commit[:12]}"
+    write_private(ai / UP_ENV, env_file_text(env))
+    write_private(ai / UP_CONFIG, json.dumps(graph_config, indent=2))
+    write_private(
+        ai / UP_COMPOSE,
+        up_compose_override(mounts, writable, image, loopback_port(env), aws_mounts(env, base)),
+    )
+    exclude_locally(ai, (UP_CONFIG, UP_ENV, UP_COMPOSE))
     up_env = {**base, "BUILDX_BUILDER": "default"}
     if subprocess.run(
         ["docker", "image", "inspect", image], env=up_env, capture_output=True
@@ -474,6 +606,17 @@ def prepare(
         revision = "local-" + revisions["EpochAI"]["commit"]
     ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
+    backend_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
+    backend_env.update(backend_access)
+    ai_values = {**ai_values, **document_access(config.get("documents", {}))}
+    check_document_access(ai_values, base)
+    print(
+        "Web research: "
+        + ("on" if ai_values.get("EPOCH_WEB_RESEARCH_ENABLED", "").lower() in ("1", "true") else "off")
+        + "; document URL capture: on; AWS document reading: "
+        + ("on" if ai_values.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") == "true" else "off"),
+        flush=True,
+    )
     (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
     print(f"Local commentary deployment: {revision}", flush=True)
     # The agent publishes `epoch login`'s client in its protected resource metadata.

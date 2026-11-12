@@ -375,7 +375,8 @@ def test_up_container_env_reaches_the_host_and_mounts_named_dirs(tmp_path, monke
         "MISSING_DIR": str(tmp_path / "absent"),
         "OUTSIDE_DIR": "/usr",
     }
-    env, mounts = local_stack.up_container_env(values)
+    env, mounts, writable = local_stack.up_container_env(values)
+    assert writable == []
     assert env["EPOCH_BACKEND_URL"] == "http://host.docker.internal:9000"
     assert env["EPOCH_CAMPAIGN_SERVER"] == "http://host.docker.internal:9000"
     assert env["EPOCH_AI_URL"] == env["LANGGRAPH_API_URL"] == "http://localhost:8000"
@@ -385,6 +386,151 @@ def test_up_container_env_reaches_the_host_and_mounts_named_dirs(tmp_path, monke
     override = local_stack.up_compose_override(mounts)
     assert '"host.docker.internal:host-gateway"' in override
     assert f'"{tmp_path}/templates:{tmp_path}/templates:ro"' in override
+
+
+def test_source_access_shares_one_kept_token_and_enables_web_with_exa(tmp_path):
+    backend, ai = local_stack.source_access(
+        tmp_path, "http://localhost:9000", {}, {"EXA_API_KEY": "exa", "KEEP": "1"}
+    )
+    token = backend[local_stack.WORKER_TOKEN]
+    assert len(token) >= 32 and ai[local_stack.WORKER_TOKEN] == token
+    assert (tmp_path / "document-worker-token").stat().st_mode & 0o077 == 0
+    assert ai["EPOCH_DOCUMENT_BACKEND_URL"] == "http://localhost:9000"
+    assert ai["EPOCH_WEB_RESEARCH_ENABLED"] == "true" and ai["KEEP"] == "1"
+    journal = Path(ai["EPOCH_WEB_RESEARCH_JOURNAL"])
+    assert journal == (tmp_path / "ai/web-journal") and journal.stat().st_mode & 0o077 == 0
+    again, _ = local_stack.source_access(tmp_path, "http://localhost:9000", {}, {})
+    assert again[local_stack.WORKER_TOKEN] == token  # kept across restarts
+
+
+def test_source_access_keeps_operator_settings(tmp_path):
+    backend, ai = local_stack.source_access(
+        tmp_path,
+        "http://localhost:9000",
+        {local_stack.WORKER_TOKEN: "b" * 40},
+        {"EXA_API_KEY": "exa", "EPOCH_WEB_RESEARCH_ENABLED": "false"},
+    )
+    assert backend[local_stack.WORKER_TOKEN] == ai[local_stack.WORKER_TOKEN] == "b" * 40
+    assert ai["EPOCH_WEB_RESEARCH_ENABLED"] == "false"
+    assert "EPOCH_WEB_RESEARCH_JOURNAL" not in ai
+    assert not (tmp_path / "document-worker-token").exists()
+    _, no_exa = local_stack.source_access(tmp_path, "http://localhost:9000", {}, {})
+    assert "EPOCH_WEB_RESEARCH_ENABLED" not in no_exa
+
+
+def test_up_workers_keep_loopback_through_a_relay(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
+    journal = tmp_path / "state/ai/web-journal"
+    journal.mkdir(parents=True)
+    values = {
+        "EPOCH_BACKEND_URL": "http://localhost:9000",
+        "EPOCH_CAMPAIGN_SERVER": "http://localhost:9000",
+        "EPOCH_AI_URL": "http://localhost:2124",
+        "LANGGRAPH_API_URL": "http://localhost:2124",
+        "EPOCH_DOCUMENT_BACKEND_URL": "http://localhost:9000",
+        "EPOCH_WEB_RESEARCH_JOURNAL": str(journal),
+    }
+    env, mounts, writable = local_stack.up_container_env(values)
+    assert env["EPOCH_DOCUMENT_BACKEND_URL"] == "http://localhost:9000"
+    assert mounts == [] and writable == [str(journal)]
+    port = local_stack.loopback_port(env)
+    assert port == 9000
+    assert local_stack.loopback_port({"EPOCH_DOCUMENT_BACKEND_URL": "https://api.example"}) is None
+    override = local_stack.up_compose_override(mounts, writable, "epoch-ai-up:abc", port)
+    assert f'"{journal}:{journal}"' in override
+    assert 'network_mode: "service:langgraph-api"' in override
+    assert f'"{local_stack.RELAY}", "9000", "host.docker.internal"' in override
+    assert "backend-loopback" not in local_stack.up_compose_override([], [], "x", None)
+
+
+def test_loopback_relay_carries_both_directions():
+    from tools import loopback_forward
+
+    async def scenario():
+        async def echo(reader, writer):
+            writer.write(b"pong:" + await reader.read(4))
+            await writer.drain()
+            writer.close()
+
+        # The host side listens on another loopback address with the same port.
+        upstream = await asyncio.start_server(echo, "127.0.0.2", 0)
+        port = upstream.sockets[0].getsockname()[1]
+        async with upstream:
+            relay = asyncio.create_task(loopback_forward.main(port, "127.0.0.2"))
+            try:
+                for _ in range(50):
+                    try:
+                        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                        break
+                    except OSError:
+                        await asyncio.sleep(0.02)
+                writer.write(b"ping")
+                await writer.drain()
+                assert await asyncio.wait_for(reader.read(), 5) == b"pong:ping"
+                writer.close()
+            finally:
+                relay.cancel()
+
+    asyncio.run(scenario())
+
+
+def test_document_access_is_off_unless_configured():
+    assert local_stack.document_access({}) == {}
+    with pytest.raises(ValueError, match="aws_profile, account_id, bucket"):
+        local_stack.document_access({"aws_profile": "dev"})
+    env = local_stack.document_access(
+        {"aws_profile": "dev", "account_id": "123456789012", "bucket": "epoch-dev-personal"}
+    )
+    assert env["EPOCH_DOCUMENT_PREPARATION_ENABLED"] == "true"
+    assert env["EPOCH_DOCUMENT_BDA_PROFILE_ARN"] == (
+        "arn:aws:bedrock:us-east-1:123456789012:data-automation-profile/us.data-automation-v1"
+    )
+    assert env["AWS_PROFILE"] == "dev" and env["EPOCH_DOCUMENT_AWS_BUCKET"] == "epoch-dev-personal"
+
+
+def fake_aws(tmp_path, account, region):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "aws"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        f'  sts) echo {account} ;;\n'
+        f'  s3api) echo {region} ;;\n'
+        "esac\n"
+    )
+    script.chmod(0o755)
+    return {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def test_document_access_is_checked_before_launch(tmp_path):
+    env = local_stack.document_access(
+        {"aws_profile": "dev", "account_id": "123456789012", "bucket": "epoch-dev-personal"}
+    )
+    local_stack.check_document_access({}, {})  # off: nothing to check
+    local_stack.check_document_access(env, fake_aws(tmp_path / "ok", "123456789012", "None"))
+    with pytest.raises(ValueError, match="not the configured document account"):
+        local_stack.check_document_access(env, fake_aws(tmp_path / "acct", "999999999999", "None"))
+    with pytest.raises(ValueError, match="must be in us-east-1"):
+        local_stack.check_document_access(env, fake_aws(tmp_path / "west", "123456789012", "us-west-2"))
+    signed_out = fake_aws(tmp_path / "out", "x", "x")
+    (Path(signed_out["PATH"].split(":")[0]) / "aws").write_text("#!/bin/sh\nexit 255\n")
+    with pytest.raises(ValueError, match="aws sso login --profile dev"):
+        local_stack.check_document_access(env, signed_out)
+
+
+def test_document_reading_mounts_only_aws_config_and_sign_in_cache(tmp_path):
+    assert local_stack.aws_mounts({}, {"HOME": str(tmp_path)}) == []
+    mounts = local_stack.aws_mounts(
+        {"EPOCH_DOCUMENT_PREPARATION_ENABLED": "true"}, {"HOME": str(tmp_path)}
+    )
+    assert mounts == [
+        (str(tmp_path / ".aws/config"), "/root/.aws/config"),
+        (str(tmp_path / ".aws/sso/cache"), "/root/.aws/sso/cache"),
+    ]
+    override = local_stack.up_compose_override([], [], "img", None, mounts)
+    assert f'"{tmp_path}/.aws/sso/cache:/root/.aws/sso/cache:ro"' in override
+    assert "credentials" not in override
 
 
 def test_up_env_file_is_literal_and_rejects_unquotable_values():
