@@ -41,7 +41,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     ai_commit = "a" * 40
     monkeypatch.setattr(
         local_stack, "verify_primary_checkouts",
-        lambda: {"EpochAI": {"commit": ai_commit, "branch": "dev", "path": str(ai)}},
+        lambda: {"EpochAI": {"commit": ai_commit, "branch": "main", "path": str(ai)}},
     )
     for file in (
         backend / "build/bin/epoch_stratifyx_server",
@@ -340,3 +340,65 @@ def test_cleanup_kills_descendant_after_leader_exits(tmp_path):
         assert not proc.exists() or proc.read_text().split()[2] == "Z"
     finally:
         local_stack.stop([leader], grace=0)
+
+
+def test_up_profile_is_local_with_its_own_agent_port(tmp_path, monkeypatch):
+    up = Stack.load(Path("environments.toml"), "local-up")
+    assert up.is_local and local_stack.local_ports(up) == [9000, 2124, 3000]
+    assert local_stack.local_ports(Stack.load(Path("environments.toml"), "local")) == [
+        9000,
+        2024,
+        3000,
+    ]
+    monkeypatch.delenv("EPOCH_TOKEN", raising=False)
+    monkeypatch.setattr(local_auth, "cached_token", lambda: "local-token")
+    assert up.bearer() == "Bearer local-token"
+    assert up.login_path() == local_auth.token_path()
+
+
+def test_up_container_env_reaches_the_host_and_mounts_named_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "templates").mkdir()
+    values = {
+        "EPOCH_BACKEND_URL": "http://localhost:9000",
+        "EPOCH_CAMPAIGN_SERVER": "http://localhost:9000",
+        "EPOCH_AI_URL": "http://localhost:2124",
+        "LANGGRAPH_API_URL": "http://localhost:2124",
+        "POSTGRES_URI": "postgresql://localhost:5432/langgraph_checkpoints",
+        "SCRIPT_TEMPLATES_DIR": str(tmp_path / "templates"),
+        "MISSING_DIR": str(tmp_path / "absent"),
+        "OUTSIDE_DIR": "/usr",
+    }
+    env, mounts = local_stack.up_container_env(values)
+    assert env["EPOCH_BACKEND_URL"] == "http://host.docker.internal:9000"
+    assert env["EPOCH_CAMPAIGN_SERVER"] == "http://host.docker.internal:9000"
+    assert env["EPOCH_AI_URL"] == env["LANGGRAPH_API_URL"] == "http://localhost:8000"
+    assert "POSTGRES_URI" not in env
+    assert mounts == [str(tmp_path / "templates")]
+    assert values["EPOCH_BACKEND_URL"] == "http://localhost:9000"  # input untouched
+    override = local_stack.up_compose_override(mounts)
+    assert '"host.docker.internal:host-gateway"' in override
+    assert f'"{tmp_path}/templates:{tmp_path}/templates:ro"' in override
+
+
+def test_up_env_file_is_literal_and_rejects_unquotable_values():
+    text = local_stack.env_file_text({"B": "x$HOME\\y", "A": "1"})
+    assert text == "A='1'\nB='x$HOME\\y'\n"
+    for bad in ("it's", "two\nlines"):
+        with pytest.raises(ValueError, match="BAD cannot be written"):
+            local_stack.env_file_text({"BAD": bad})
+
+
+def test_up_files_are_excluded_locally_once(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    names = (local_stack.UP_CONFIG, local_stack.UP_ENV, local_stack.UP_COMPOSE)
+    local_stack.exclude_locally(tmp_path, names)
+    local_stack.exclude_locally(tmp_path, names)
+    lines = (tmp_path / ".git/info/exclude").read_text().splitlines()
+    assert [line for line in lines if line in names] == list(names)
+    for name in names:
+        (tmp_path / name).write_text("generated")
+    status = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--porcelain"], capture_output=True, text=True
+    ).stdout
+    assert status == ""

@@ -651,7 +651,7 @@ def test_profiles_default_to_dev_and_require_an_explicit_existing_profile(tmp_pa
     assert local.backend_url == "http://127.0.0.1:19048"
     with pytest.raises(ValueError, match="No \\[dev\\] profile"):
         app.Stack.load(custom)
-    with pytest.raises(ValueError, match="Choose local, dev, qa or prod"):
+    with pytest.raises(ValueError, match="Choose local, local-up, dev, qa or prod"):
         app.Stack.load(custom, "typo")
 
 

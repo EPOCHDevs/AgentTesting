@@ -1,4 +1,4 @@
-"""Conversation driver for an explicitly selected local, dev, qa or prod stack.
+"""Conversation driver for an explicitly selected local, local-up, dev, qa or prod stack.
 
 Adapted from EpochAI's supervisor CLI: persistent threads, explicit interrupt
 replies and live capture. Product implementation imports and database access
@@ -34,7 +34,10 @@ from tools.evidence_redaction import redact_run
 from tools.traces import TraceWindow
 
 ROOT = Path(__file__).resolve().parents[1]
-Environment = Literal["local", "dev", "qa", "prod"]
+Environment = Literal["local", "local-up", "dev", "qa", "prod"]
+# Stacks on this machine: the launcher's agent under `langgraph dev` (local)
+# or the licensed server under `langgraph up` (local-up). Both share local sign-in.
+LOCAL_ENVIRONMENTS = ("local", "local-up")
 
 
 class ServiceIdentity(TypedDict):
@@ -152,14 +155,15 @@ class Stack:
     @classmethod
     def load(cls, path: Path, environment: Environment = "dev") -> Stack:
         if environment not in get_args(Environment):
-            raise ValueError("Choose local, dev, qa or prod.")
+            raise ValueError("Choose local, local-up, dev, qa or prod.")
         profiles = tomllib.loads(path.read_text())
         if environment not in profiles:
             raise ValueError(
                 f"No [{environment}] profile in {path}; no other profile will be substituted."
             )
         config = cls(**profiles[environment], environment=environment)
-        schemes = ("http", "https") if environment == "local" else ("https",)
+        local = environment in LOCAL_ENVIRONMENTS
+        schemes = ("http", "https") if local else ("https",)
         for url in (config.ai_url, config.backend_url, config.ui_url):
             parts = urlsplit(url)
             if (
@@ -171,19 +175,23 @@ class Stack:
                 or parts.fragment
             ):
                 raise ValueError(
-                    f"Configure explicit {'HTTP(S)' if environment == 'local' else 'HTTPS'} {environment} service URLs without credentials or query strings."
+                    f"Configure explicit {'HTTP(S)' if local else 'HTTPS'} {environment} service URLs without credentials or query strings."
                 )
         return config
 
+    @property
+    def is_local(self) -> bool:
+        return self.environment in LOCAL_ENVIRONMENTS
+
     def login_path(self) -> Path:
         # Hosted logins are cached per Portal host, so one never reaches another stack.
-        if self.environment == "local":
+        if self.is_local:
             return local_auth.token_path()
         return local_auth.token_path(cast(str, urlsplit(self.ui_url).hostname))
 
     def user_pool(self) -> local_auth.UserPool:
         """The sign-in pool the selected Portal publishes; local's is fixed."""
-        if self.environment == "local":
+        if self.is_local:
             return local_auth.LOCAL
         try:
             response = httpx.get(
@@ -219,7 +227,7 @@ class Stack:
     def bearer(self) -> str:
         value = os.environ.get(self.token_env)
         if not value and self.token_env == "EPOCH_TOKEN":
-            if self.environment == "local":
+            if self.is_local:
                 value = local_auth.cached_token()
             elif self.login_path().exists():
                 value = local_auth.cached_token(

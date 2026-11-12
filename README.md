@@ -66,8 +66,8 @@ The launcher uses the primary repositories beside AgentTesting:
 | Directory | Branch |
 |---|---|
 | `EpochBackend/` | `main` |
-| `EpochAI/` | `dev` |
-| `EpochClientPortal/` | `dev` |
+| `EpochAI/` | `main` |
+| `EpochClientPortal/` | `main` |
 
 Before login or startup it checks those branches, rejects linked worktrees and
 uncommitted tracked changes, and compares each checkout with its current remote
@@ -84,6 +84,28 @@ build revision; rebuild it from that source through the normal Backend workflow.
 ```bash
 .venv/bin/python -m tools.local_stack
 ```
+
+The agent server runs under `langgraph dev` on port 2024 by default (`local`
+profile). That server shares one Python process, so concurrent runs wait on each
+other. For parallel runs, start the licensed server instead:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up
+```
+
+This uses the `local-up` profile: the same Backend (9000) and Portal (3000) with
+the agent on **2124** under `langgraph up` (Postgres, Redis queue, background
+workers, custom auth). It needs Docker and a `LANGSMITH_API_KEY` with LangSmith
+Deployment access plus the matching `LANGSMITH_ENDPOINT`; no Enterprise licence
+key is used. The launcher builds `epoch-ai-up:<EpochAI commit>` from EpochAI's
+own `langgraph.json` once per commit (log: `.artifacts/local-stack/ai-build.log`),
+writes `langgraph-up.local.json`, `.env.up.local` (mode 600) and
+`docker-compose.up.local.yml` in EpochAI's directory, keeps them out of `git status`
+through `.git/info/exclude`, points the container at the host's Backend through
+`host.docker.internal`, and mounts host directories named by the agent env
+read-only at the same paths. Ctrl+C stops the services and runs
+`docker compose down`; Postgres data stays in its volume. Use
+`--env local-up` with `tools.agent_testing` for this stack.
 
 `local-stack.toml` is optional and may set `node_bin`; see
 `local-stack.example.toml`. Remove old worktree paths from an existing local

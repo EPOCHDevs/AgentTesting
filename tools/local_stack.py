@@ -22,10 +22,11 @@ from tools.agent_testing import Stack, check_stack
 from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Every product repository integrates on main; dev is no longer targeted.
 PROJECT_BRANCHES = {
     "EpochBackend": "main",
-    "EpochAI": "dev",
-    "EpochClientPortal": "dev",
+    "EpochAI": "main",
+    "EpochClientPortal": "main",
 }
 
 
@@ -192,6 +193,141 @@ def private_dir(path: Path) -> Path:
     return path.resolve()
 
 
+def write_private(path: Path, text: str) -> None:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(text)
+
+
+# `langgraph up` builds from EpochAI's own directory, so its generated config,
+# env file and compose override live there, excluded from `git status` locally.
+UP_CONFIG, UP_ENV, UP_COMPOSE = (
+    "langgraph-up.local.json",
+    ".env.up.local",
+    "docker-compose.up.local.yml",
+)
+CONTAINER_HOST = "host.docker.internal"
+CONTAINER_PORT = 8000  # langgraph-api's port inside its container
+
+
+def up_container_env(values: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Point the agent's local env at the host from its container.
+
+    Returns the env and the host directories it names, to mount read-only."""
+    env = dict(values)
+    for key in ("EPOCH_BACKEND_URL", "EPOCH_CAMPAIGN_SERVER"):
+        parts = urlsplit(env[key])
+        env[key] = parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
+    for key in ("EPOCH_AI_URL", "LANGGRAPH_API_URL"):
+        env[key] = f"http://localhost:{CONTAINER_PORT}"
+    env.pop("POSTGRES_URI", None)  # `up` brings its own Postgres.
+    mounts = sorted(
+        {
+            value
+            for value in env.values()
+            if value.startswith(f"{PROJECT_ROOT}/") and Path(value).is_dir()
+        }
+    )
+    return env, mounts
+
+
+def env_file_text(env: dict[str, str]) -> str:
+    # Single quotes keep Compose from interpolating or unescaping secret values.
+    for key, value in env.items():
+        if "'" in value or "\n" in value:
+            raise ValueError(f"{key} cannot be written to the container env file.")
+    return "".join(f"{key}='{value}'\n" for key, value in sorted(env.items()))
+
+
+def up_compose_override(mounts: list[str]) -> str:
+    lines = [
+        "services:",
+        "  langgraph-api:",
+        "    extra_hosts:",
+        f'      - "{CONTAINER_HOST}:host-gateway"',
+    ]
+    if mounts:
+        lines.append("    volumes:")
+        lines += [f'      - "{mount}:{mount}:ro"' for mount in mounts]
+    return "\n".join(lines) + "\n"
+
+
+def exclude_locally(repo: Path, names: tuple[str, ...]) -> None:
+    """Keep generated files out of `git status` without editing tracked ignores."""
+    path = Path(
+        subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],
+            text=True,
+        ).strip()
+    )
+    path = path if path.is_absolute() else repo / path
+    existing = path.read_text().splitlines() if path.exists() else []
+    missing = [name for name in names if name not in existing]
+    if missing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as stream:
+            stream.write("".join(f"{name}\n" for name in missing))
+
+
+def up_project(ai: Path) -> str:
+    return ai.name.lower()  # Compose's project name for EpochAI's directory.
+
+
+def prepare_up(
+    ai: Path,
+    langgraph: Path,
+    values: dict[str, str],
+    stack: Stack,
+    port: int,
+    commit: str,
+    state: Path,
+    base: dict[str, str],
+) -> tuple:
+    if not shutil.which("docker", path=base.get("PATH")):
+        raise ValueError("The up runtime needs Docker on PATH.")
+    env, mounts = up_container_env(values)
+    graph_config = json.loads((ai / "langgraph.json").read_text())
+    graph_config["env"] = UP_ENV
+    write_private(ai / UP_ENV, env_file_text(env))
+    write_private(ai / UP_CONFIG, json.dumps(graph_config, indent=2))
+    write_private(ai / UP_COMPOSE, up_compose_override(mounts))
+    exclude_locally(ai, (UP_CONFIG, UP_ENV, UP_COMPOSE))
+    # One image per EpochAI commit; the default builder avoids a stale buildx one.
+    image = f"epoch-ai-up:{commit[:12]}"
+    up_env = {**base, "BUILDX_BUILDER": "default"}
+    if subprocess.run(
+        ["docker", "image", "inspect", image], env=up_env, capture_output=True
+    ).returncode:
+        log = state / "ai-build.log"
+        print(f"Building agent image {image}; log: {log}", flush=True)
+        with os.fdopen(
+            os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+        ) as stream:
+            built = subprocess.run(
+                [str(langgraph), "build", "-c", UP_CONFIG, "-t", image],
+                cwd=ai,
+                env=up_env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+            )
+        if built.returncode:
+            raise ValueError(f"The agent image build failed. Inspect {log}.")
+    command = [
+        str(langgraph),
+        "up",
+        "-c",
+        UP_CONFIG,
+        "-p",
+        str(port),
+        "-d",
+        UP_COMPOSE,
+        "--image",
+        image,
+        "--recreate",
+        "--no-pull",
+    ]
+    return ("AI", command, ai, up_env, stack.ai_url + "/ok")
+
+
 def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"Missing service environment file: {path}")
@@ -209,7 +345,7 @@ def local_ports(stack: Stack) -> list[int]:
             or parts.port is None
         ):
             raise ValueError(
-                "The launcher requires explicit localhost HTTP ports in [local]."
+                "The launcher requires explicit localhost HTTP ports in the local profile."
             )
         ports.append(parts.port)
     if len(set(ports)) != 3:
@@ -229,7 +365,9 @@ def check_ports(ports: list[int]) -> None:
                 ) from None
 
 
-def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
+def prepare(
+    config_file: Path, stack: Stack, state: Path, ai_runtime: str = "dev"
+) -> list[tuple]:
     config, paths = primary_paths(config_file)
     revisions = verify_primary_checkouts()
     for name, revision in revisions.items():
@@ -375,15 +513,19 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "VITE_COGNITO_USER_POOL_ID": POOL,
         "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT,
     }
-    return [
-        (
-            "Backend",
-            [str(binary), "--port", str(ports[0])],
-            state / "backend",
-            backend_env,
-            stack.backend_url + "/api/v1/health",
-        ),
-        (
+    ai_service = (
+        prepare_up(
+            ai,
+            langgraph,
+            {**ai_values, **common},
+            stack,
+            ports[1],
+            revisions["EpochAI"]["commit"],
+            state,
+            base,
+        )
+        if ai_runtime == "up"
+        else (
             "AI",
             [
                 str(langgraph),
@@ -400,7 +542,17 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             ai_state,
             ai_env,
             stack.ai_url + "/ok",
+        )
+    )
+    return [
+        (
+            "Backend",
+            [str(binary), "--port", str(ports[0])],
+            state / "backend",
+            backend_env,
+            stack.backend_url + "/api/v1/health",
         ),
+        ai_service,
         (
             "UI",
             [
@@ -479,6 +631,13 @@ def main() -> None:
     parser.add_argument(
         "--login", action="store_true", help="Replace the cached local login"
     )
+    parser.add_argument(
+        "--ai-runtime",
+        choices=("dev", "up"),
+        default="dev",
+        help="Agent server: `langgraph dev` on the local profile (2024), or the "
+        "licensed `langgraph up` server with parallel runs on local-up (2124)",
+    )
     args = parser.parse_args()
     children = []
     state = private_dir(Path(".artifacts/local-stack"))
@@ -488,9 +647,11 @@ def main() -> None:
         except BlockingIOError:
             parser.exit(1, "The local launcher is already running.\n")
         try:
-            stack = Stack.load(args.environments, "local")
+            stack = Stack.load(
+                args.environments, "local-up" if args.ai_runtime == "up" else "local"
+            )
             check_ports(local_ports(stack))
-            services = prepare(args.config, stack, state)
+            services = prepare(args.config, stack, state, args.ai_runtime)
             bearer = (
                 login(args.email)
                 if args.login or not token_path().exists()
@@ -511,7 +672,9 @@ def main() -> None:
                     )
                 children.append(child)
                 print(f"Starting {name}; log: {log}", flush=True)
-                wait_ready(url, children, 180)
+                # The up server imports the graphs inside its container first.
+                up_agent = name == "AI" and args.ai_runtime == "up"
+                wait_ready(url, children, 420 if up_agent else 180)
             receipt = asyncio.run(check_stack(stack, "Bearer " + bearer))
             (state / "health.json").write_text(
                 json.dumps(receipt, indent=2, default=str)
@@ -530,6 +693,13 @@ def main() -> None:
             parser.exit(1, f"{exc}\n")
         finally:
             stop(children)
+            if args.ai_runtime == "up":
+                # Compose may leave the containers if `langgraph up` stopped early.
+                ai_dir = primary_paths(args.config)[1]["ai_dir"]
+                subprocess.run(
+                    ["docker", "compose", "-p", up_project(ai_dir), "down", "--remove-orphans"],
+                    capture_output=True,
+                )
 
 
 if __name__ == "__main__":
