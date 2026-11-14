@@ -554,3 +554,65 @@ def test_up_files_are_excluded_locally_once(tmp_path):
         ["git", "-C", str(tmp_path), "status", "--porcelain"], capture_output=True, text=True
     ).stdout
     assert status == ""
+
+
+def test_ui_build_runtime_serves_one_bundle_per_commit_through_the_agent_proxy(
+    tmp_path, monkeypatch
+):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / ".env.local").write_text("VITE_SHOWCASE_MODE=\n")
+    stack = Stack.load(Path("environments.toml"), "local")
+    state = local_stack.private_dir(tmp_path / "state")
+    ui_env = {"PATH": "/bin", "VITE_LANGGRAPH_API_URL": stack.ai_url,
+              "VITE_API_BASE_URL": stack.backend_url}
+    builds = []
+
+    def build(command, cwd, env, stdout, stderr):
+        builds.append((command, env))
+        out = Path(command[command.index("--outDir") + 1])
+        out.mkdir(parents=True)
+        (out / "index.html").write_text("<html></html>")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_stack.subprocess, "run", build)
+    commit = "b" * 40
+    name, command, cwd, env, ready = local_stack.prepare_ui_build(
+        ui, "/bin/corepack", ui_env, stack, 3000, commit, state
+    )
+    assert name == "UI" and cwd == ui and ready == stack.ui_url
+    [(build_command, build_env)] = builds
+    assert build_command[:5] == ["/bin/corepack", "pnpm", "exec", "vite", "build"]
+    # The bundle talks to the agent through its own origin's proxy (the agent's CORS list
+    # does not include this port); the preview server proxies to the real agent.
+    assert build_env["VITE_LANGGRAPH_API_URL"] == stack.ui_url.rstrip("/") + "/lg-api"
+    assert env["VITE_LANGGRAPH_API_URL"] == stack.ai_url
+    assert command[:5] == ["/bin/corepack", "pnpm", "exec", "vite", "preview"]
+    bundle = Path(command[command.index("--outDir") + 1])
+    assert bundle.name.startswith(commit[:12]) and (bundle / "index.html").is_file()
+    assert command[-3:] == ["--port", "3000", "--strictPort"]
+
+    # The same commit and configuration reuse the bundle.
+    again = local_stack.prepare_ui_build(ui, "/bin/corepack", ui_env, stack, 3000, commit, state)
+    assert again[1] == command and len(builds) == 1
+    # A changed env file is a different bundle, and the old one is removed.
+    (ui / ".env.local").write_text("VITE_SHOWCASE_MODE=1\n")
+    changed = local_stack.prepare_ui_build(ui, "/bin/corepack", ui_env, stack, 3000, commit, state)
+    assert len(builds) == 2 and changed[1] != command
+    assert [path.name for path in (state / "ui-builds").iterdir()] == [
+        Path(changed[1][changed[1].index("--outDir") + 1]).name
+    ]
+
+
+def test_ui_build_failure_is_explicit(tmp_path, monkeypatch):
+    stack = Stack.load(Path("environments.toml"), "local")
+    state = local_stack.private_dir(tmp_path / "state")
+    monkeypatch.setattr(
+        local_stack.subprocess, "run",
+        lambda command, **_: subprocess.CompletedProcess(command, 1),
+    )
+    with pytest.raises(ValueError, match="UI build failed"):
+        local_stack.prepare_ui_build(
+            tmp_path, "/bin/corepack", {"PATH": "/bin"}, stack, 3000, "c" * 40, state
+        )
+    assert not any((state / "ui-builds").iterdir())

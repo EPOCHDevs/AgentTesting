@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -459,6 +460,66 @@ def prepare_up(
     return ("AI", command, ai, up_env, stack.ai_url + "/ok")
 
 
+# Vite reads these files in production mode too; a change to them changes the bundle.
+UI_ENV_FILES = (".env", ".env.local", ".env.production", ".env.production.local")
+
+
+def prepare_ui_build(
+    ui: Path,
+    corepack: str,
+    ui_env: dict[str, str],
+    stack: Stack,
+    port: int,
+    commit: str,
+    state: Path,
+) -> tuple:
+    """The Portal's production bundle, served by `vite preview`, as a deployment serves it.
+
+    One bundle per EpochClientPortal commit and configuration, kept between restarts, as the
+    agent keeps one image per EpochAI commit. The agent's CORS list does not include this
+    origin, so the bundle talks to it through the same /lg-api proxy the dev server uses;
+    `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
+    """
+    origin = stack.ui_url.rstrip("/")
+    build_env = {**ui_env, "VITE_LANGGRAPH_API_URL": f"{origin}/lg-api"}
+    configuration = hashlib.sha256()
+    for key in sorted(k for k in build_env if k.startswith("VITE_")):
+        configuration.update(f"{key}={build_env[key]}\n".encode())
+    for name in UI_ENV_FILES:
+        if (ui / name).is_file():
+            configuration.update(name.encode() + b"\0" + (ui / name).read_bytes())
+    builds = private_dir(state / "ui-builds")
+    bundle = builds / f"{commit[:12]}-{configuration.hexdigest()[:12]}"
+    if not (bundle / "index.html").is_file():
+        partial = bundle.with_name(bundle.name + ".partial")
+        shutil.rmtree(partial, ignore_errors=True)
+        log = state / "ui-build.log"
+        print(f"Building UI bundle {bundle.name}; log: {log}", flush=True)
+        with os.fdopen(
+            os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+        ) as stream:
+            built = subprocess.run(
+                [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
+                 "--emptyOutDir"],
+                cwd=ui,
+                env=build_env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+            )
+        if built.returncode or not (partial / "index.html").is_file():
+            raise ValueError(f"The UI build failed. Inspect {log}.")
+        partial.rename(bundle)
+        # Older bundles are never served again.
+        for old in builds.iterdir():
+            if old != bundle:
+                shutil.rmtree(old, ignore_errors=True)
+    command = [
+        corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(bundle),
+        "--host", "127.0.0.1", "--port", str(port), "--strictPort",
+    ]
+    return ("UI", command, ui, ui_env, stack.ui_url)
+
+
 def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"Missing service environment file: {path}")
@@ -497,7 +558,11 @@ def check_ports(ports: list[int]) -> None:
 
 
 def prepare(
-    config_file: Path, stack: Stack, state: Path, ai_runtime: str = "dev"
+    config_file: Path,
+    stack: Stack,
+    state: Path,
+    ai_runtime: str = "dev",
+    ui_runtime: str = "dev",
 ) -> list[tuple]:
     config, paths = primary_paths(config_file)
     revisions = verify_primary_checkouts()
@@ -698,7 +763,12 @@ def prepare(
             stack.backend_url + "/api/v1/health",
         ),
         ai_service,
-        (
+        prepare_ui_build(
+            ui, corepack, ui_env, stack, ports[2],
+            revisions["EpochClientPortal"]["commit"], state,
+        )
+        if ui_runtime == "build"
+        else (
             "UI",
             [
                 corepack,
@@ -783,6 +853,13 @@ def main() -> None:
         help="Agent server: `langgraph dev` on the local profile (2024), or the "
         "licensed `langgraph up` server with parallel runs on local-up (2124)",
     )
+    parser.add_argument(
+        "--ui-runtime",
+        choices=("build", "dev"),
+        default="build",
+        help="Portal: its production bundle served by `vite preview` (built once per commit), "
+        "or the `vite` dev server with hot reload",
+    )
     args = parser.parse_args()
     children = []
     state = private_dir(Path(".artifacts/local-stack"))
@@ -796,7 +873,7 @@ def main() -> None:
                 args.environments, "local-up" if args.ai_runtime == "up" else "local"
             )
             check_ports(local_ports(stack))
-            services = prepare(args.config, stack, state, args.ai_runtime)
+            services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime)
             bearer = (
                 login(args.email)
                 if args.login or not token_path().exists()
