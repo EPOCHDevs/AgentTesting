@@ -19,7 +19,7 @@ import httpx
 from dotenv import dotenv_values
 
 from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
-from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
+from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Every product repository integrates on main; dev is no longer targeted.
@@ -441,7 +441,8 @@ def prepare(
         "COGNITO_REGION": REGION,
         "COGNITO_USER_POOL_ID": POOL,
         "COGNITO_CLIENT_ID": CLIENT,
-        "COGNITO_CLIENT_IDS": CLIENT,
+        # The Portal's client, and `epoch login`'s, whose ID tokens /v1/auth/token exchanges.
+        "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
     }
     backend_values = read_env(paths["backend_env"])
     backend_env = {
@@ -475,8 +476,10 @@ def prepare(
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
     (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
     print(f"Local commentary deployment: {revision}", flush=True)
-    ai_env = {**base, **ai_values, **common}
-    graph_config["env"] = {**ai_values, **common}
+    # The agent publishes `epoch login`'s client in its protected resource metadata.
+    sign_in = {"EPOCH_SIGN_IN_CLIENT_ID": CLI_CLIENT}
+    ai_env = {**base, **ai_values, **common, **sign_in}
+    graph_config["env"] = {**ai_values, **common, **sign_in}
     graph_config["dependencies"] = [
         str(ai / dep) if dep.startswith(".") else dep
         for dep in graph_config.get("dependencies", [])
