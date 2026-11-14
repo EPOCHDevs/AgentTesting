@@ -19,7 +19,7 @@ import httpx
 from dotenv import dotenv_values
 
 from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
-from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
+from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Every product repository integrates on main; dev is no longer targeted.
@@ -441,7 +441,8 @@ def prepare(
         "COGNITO_REGION": REGION,
         "COGNITO_USER_POOL_ID": POOL,
         "COGNITO_CLIENT_ID": CLIENT,
-        "COGNITO_CLIENT_IDS": CLIENT,
+        # The Portal's client, and `epoch login`'s, whose ID tokens /v1/auth/token exchanges.
+        "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
     }
     backend_values = read_env(paths["backend_env"])
     backend_env = {

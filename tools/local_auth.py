@@ -15,6 +15,9 @@ from pycognito import Cognito
 REGION = "us-west-1"
 POOL = "us-west-1_Fz1y1zKFq"
 CLIENT = "2m0ep0k9gksk00ml7qtkked0fk"
+# `epoch login`'s public PKCE client on the same pool (ENG-2510): managed login at
+# https://epoch-dev-signin.auth.us-west-1.amazoncognito.com, callbacks on localhost:53682-53684.
+CLI_CLIENT = "781nql1qfi7hhpmb42rha6pe4l"
 LOCAL_LOGIN = "python -m tools.local_stack --login"
 
 
