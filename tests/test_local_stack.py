@@ -103,6 +103,10 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     receipt = json.loads((state / "source-checkouts.json").read_text())
     assert receipt["EpochAI"]["commentary_deployment_revision"] == revision
     assert generated["env"]["EPOCH_CAMPAIGN_SERVER"] == stack.backend_url
+    # `epoch login` finds its client from the agent; Backend doesn't need it.
+    assert generated["env"]["EPOCH_SIGN_IN_CLIENT_ID"] == local_stack.CLI_CLIENT
+    assert _agent[3]["EPOCH_SIGN_IN_CLIENT_ID"] == local_stack.CLI_CLIENT
+    assert "EPOCH_SIGN_IN_CLIENT_ID" not in be[3]
     assert generated["graphs"]["epoch-ai"]["path"] == str(ai / "agent.py") + ":agent"
     assert generated["store"]["index"]["embed"] == str(ai / "embeddings.py") + ":embed"
     assert (state / "ai/langgraph.json").stat().st_mode & 0o777 == 0o600

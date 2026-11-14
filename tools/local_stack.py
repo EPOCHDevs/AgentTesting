@@ -476,8 +476,10 @@ def prepare(
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
     (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
     print(f"Local commentary deployment: {revision}", flush=True)
-    ai_env = {**base, **ai_values, **common}
-    graph_config["env"] = {**ai_values, **common}
+    # The agent publishes `epoch login`'s client in its protected resource metadata.
+    sign_in = {"EPOCH_SIGN_IN_CLIENT_ID": CLI_CLIENT}
+    ai_env = {**base, **ai_values, **common, **sign_in}
+    graph_config["env"] = {**ai_values, **common, **sign_in}
     graph_config["dependencies"] = [
         str(ai / dep) if dep.startswith(".") else dep
         for dep in graph_config.get("dependencies", [])
