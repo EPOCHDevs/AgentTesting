@@ -76,6 +76,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     (ai / ".env").write_text(
         "EPOCH_CAMPAIGN_SERVER=https://wrong.example\nMODEL_KEY=private\n"
         "EPOCH_FILES_WORKER_URL=https://services.dev.example\n"
+        "LANGSMITH_LANGGRAPH_GIT_REF=dev\nLANGSMITH_LANGGRAPH_GIT_REF_SHA=stale-cloud-sha\n"
         + (f'EPOCH_COMMENTARY_DEPLOYMENT_REVISION="{operator_revision}"\n'
            if operator_revision is not None else "")
     )
@@ -144,6 +145,9 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     revision = (operator_revision or "").strip() or "local-" + ai_commit
     assert generated["env"]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
     assert _agent[3]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
+    assert generated["env"]["LANGSMITH_LANGGRAPH_GIT_REF"] == "main"
+    assert generated["env"]["LANGSMITH_LANGGRAPH_GIT_REF_SHA"] == ai_commit
+    assert _agent[3]["LANGSMITH_LANGGRAPH_GIT_REF_SHA"] == ai_commit
     receipt = json.loads((state / "source-checkouts.json").read_text())
     assert receipt["EpochAI"]["commentary_deployment_revision"] == revision
     assert generated["env"]["EPOCH_CAMPAIGN_SERVER"] == stack.backend_url

@@ -756,7 +756,13 @@ def prepare(
     revision = ai_values.get("EPOCH_COMMENTARY_DEPLOYMENT_REVISION", "").strip()
     if not revision:
         revision = "local-" + revisions["EpochAI"]["commit"]
-    ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
+    ai_values = {
+        **ai_values,
+        "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision,
+        # Saved cloud metadata in a local .env does not identify this process.
+        "LANGSMITH_LANGGRAPH_GIT_REF": revisions["EpochAI"]["branch"],
+        "LANGSMITH_LANGGRAPH_GIT_REF_SHA": revisions["EpochAI"]["commit"],
+    }
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
     files_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
     ai_values = {**ai_values, **document_access(config.get("documents", {}))}
