@@ -733,6 +733,7 @@ def prepare(
         **base,
         **backend_values,
         **common,
+        "EPOCH_GIT_SHA": revisions["EpochBackend"]["commit"],
         "PORT": str(BACKEND_PORT),
         "EPOCH_SKIP_LOAD_JOBS": "0",
         "EPOCH_PROJECT_DIR": str(private_dir(state / "backend")),

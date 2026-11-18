@@ -40,11 +40,13 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     ]
     monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
     ai_commit = "a" * 40
+    backend_commit = "b" * 40
     monkeypatch.setattr(
         local_stack, "verify_primary_checkouts",
         lambda: {
             "EpochAI": {"commit": ai_commit, "branch": "main", "path": str(ai)},
             "EpochPlatform": {"commit": "p" * 40, "branch": "dev", "path": str(platform)},
+            "EpochBackend": {"commit": backend_commit, "branch": "main", "path": str(backend)},
         },
     )
     (platform / "node_modules/typescript").mkdir(parents=True)
@@ -70,7 +72,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     (ui / "node_modules").mkdir(parents=True)
     (backend / "services/stratifyx").mkdir(parents=True)
     (backend / "services/stratifyx/.env.local").write_text(
-        "EPOCH_ENVIRONMENT=prod\nEPOCH_SKIP_AUTH=1\nVENDOR_KEY=private\n"
+        "EPOCH_ENVIRONMENT=prod\nEPOCH_SKIP_AUTH=1\nVENDOR_KEY=private\nEPOCH_GIT_SHA=stale-cloud-sha\n"
         "EPOCH_TOKEN_ISSUER=http://localhost:2024\n"
     )
     (ai / ".env").write_text(
@@ -128,6 +130,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         assert _agent[3][name] == stack.backend_url
     assert be[3]["EPOCH_ENVIRONMENT"] == "local"
     assert be[3]["EPOCH_SKIP_AUTH"] == "0"
+    assert be[3]["EPOCH_GIT_SHA"] == backend_commit
     assert be[3]["EPOCH_AI_URL"] == stack.ai_url
     assert be[3]["EPOCH_PROJECT_DIR"] == str(state / "backend")
     # Backend exchanges ID tokens from the Portal's client and from `epoch login`'s.
