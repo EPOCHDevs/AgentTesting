@@ -105,25 +105,33 @@ def configure_market_pages(
         for plugin in document.get("plugins", [])
         if plugin.get("name") == "epoch_stratifyx::server::MiPageRuntimeService"
     ]
-    if len(plugins) != 1:
+    if not plugins and enabled:
+        raise ValueError(
+            "This Backend no longer hosts Markets page refresh. "
+            "Keep market_pages=false; page production is owned by Epoch Platform."
+        )
+    if len(plugins) > 1:
         raise ValueError(
             "The primary Backend runtime must have exactly one MiPageRuntimeService."
         )
-    options = plugins[0].setdefault("config", {})
-    if not isinstance(options, dict):
-        raise ValueError("The Backend MI configuration must be an object.")
-    calendar = options.setdefault("calendar", {})
-    if not isinstance(calendar, dict):
-        raise ValueError("The Backend Calendar configuration must be an object.")
-    calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
-    fd, temporary = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(document, stream, indent=2)
-            stream.write("\n")
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    # ENG-2946 retired this plugin. Disabled refresh needs no replacement plugin
+    # or runtime edit; older Backend versions still receive their explicit pause.
+    if plugins:
+        options = plugins[0].setdefault("config", {})
+        if not isinstance(options, dict):
+            raise ValueError("The Backend MI configuration must be an object.")
+        calendar = options.setdefault("calendar", {})
+        if not isinstance(calendar, dict):
+            raise ValueError("The Backend Calendar configuration must be an object.")
+        calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
+        fd, temporary = tempfile.mkstemp(dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump(document, stream, indent=2)
+                stream.write("\n")
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
     flag = "1" if enabled else "0"
     batch = (
         # Every deployed environment uses 128 (epoch-terraform #146). The

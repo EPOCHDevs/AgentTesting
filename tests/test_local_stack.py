@@ -33,7 +33,8 @@ def test_occupied_port_is_not_reused():
 
 
 @pytest.mark.parametrize("operator_revision", [None, "", "  ", "operator-deployment-7"])
-def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision):
+@pytest.mark.parametrize("native_mi_plugin", [False, True])
+def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision, native_mi_plugin):
     ai, ui, backend, platform = [
         tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend", "EpochPlatform")
     ]
@@ -64,7 +65,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         file.touch()
         file.chmod(0o700)
     (backend / "build/bin/config.json").write_text(json.dumps({"plugins": [
-        {"name": "epoch_stratifyx::server::MiPageRuntimeService", "config": {}}]}))
+        {"name": "epoch_stratifyx::server::MiPageRuntimeService", "config": {}}
+    ] if native_mi_plugin else []}))
     (ui / "node_modules").mkdir(parents=True)
     (backend / "services/stratifyx").mkdir(parents=True)
     (backend / "services/stratifyx/.env.local").write_text(
@@ -132,7 +134,10 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     # An unconfigured local stack keeps Markets page work off (shared vendor quotas).
     assert be[3]["EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED"] == "0" and be[3]["EPOCH_MI_RATES_PAGE"] == "0"
     runtime = json.loads((backend / "build/bin/config.json").read_text())
-    assert runtime["plugins"][0]["config"]["calendar"] == {"enabled": False, "refresh_mode": "paused"}
+    if native_mi_plugin:
+        assert runtime["plugins"][0]["config"]["calendar"] == {"enabled": False, "refresh_mode": "paused"}
+    else:
+        assert runtime == {"plugins": []}
     assert portal[3]["VITE_API_BASE_URL"] == stack.backend_url
     assert portal[3]["VITE_LANGGRAPH_API_URL"] == stack.ai_url
     generated = json.loads((state / "ai/langgraph.json").read_text())
