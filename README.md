@@ -68,6 +68,7 @@ The launcher uses the primary repositories beside AgentTesting:
 | `EpochBackend/` | `main` |
 | `EpochAI/` | `main` |
 | `EpochClientPortal/` | `main` |
+| `EpochPlatform/` | `dev` |
 
 Before login or startup it checks those branches, rejects linked worktrees and
 uncommitted tracked changes, and compares each checkout with its current remote
@@ -77,9 +78,24 @@ commits and records both local and remote revisions. It never switches or pulls
 repositories automatically. Worktree/path overrides are not enabled.
 
 Use the primary Backend's existing `build/bin/epoch_stratifyx_server`, the
-primary EpochAI's `.venv`, and installed UI dependencies (Node 24+ with Corepack
-and the UI's pinned pnpm). Source freshness does not certify a native executable's
-build revision; rebuild it from that source through the normal Backend workflow.
+primary EpochAI's `.venv`, and installed UI and Platform dependencies (Node 24+
+with Corepack and the UI's pinned pnpm; `pnpm install` in EpochPlatform). Source
+freshness does not certify a native executable's build revision; rebuild it from
+that source through the normal Backend workflow. The launcher compiles Platform's
+TypeScript in place (`tsc -b`, incremental; Git ignores the output).
+
+Files and Space run on Epoch Platform, as in dev, QA and production. A front door
+on the profile's Backend port (9000) applies the deployed load balancer's path
+rules: `/api/v1/files*`, `/api/v1/space*`, the Files workers' `/internal/...`
+routes and `/api/v1/platform/*` go to Platform (port 9020); everything else goes
+to Backend (port 9010). The Portal, the agent and AgentTesting keep one API origin.
+Platform runs its general service in local mode (`EPOCH_FILES_LOCAL_ROOT`): no AWS
+account, with its objects and records in Backend's `personal_content` directory
+(`.artifacts/local-stack/backend/personal_content`), where the engine's local job
+store reads saved datasets, so a dataset saved locally is a local study input.
+Files uploaded through Backend's former local Files are not carried over. The
+agent's Files workers use the front door with the shared worker token, which goes
+to Platform, not Backend.
 
 ```bash
 .venv/bin/python -m tools.local_stack

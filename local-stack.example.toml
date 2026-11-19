@@ -1,6 +1,6 @@
 # Optional settings: copy to local-stack.toml (ignored).
 # Product paths are fixed to sibling primary repositories:
-# EpochBackend, EpochAI and EpochClientPortal, all on main.
+# EpochBackend, EpochAI and EpochClientPortal on main; EpochPlatform on dev.
 # The Backend executable is EpochBackend/build/bin/epoch_stratifyx_server.
 # Worktree/path overrides are not enabled.
 # Directory containing Node 24+, when it is not already on PATH:

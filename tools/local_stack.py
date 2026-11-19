@@ -1,4 +1,4 @@
-"""Start the three local services; Ctrl+C stops only these child processes."""
+"""Start the local services; Ctrl+C stops only these child processes."""
 
 import argparse
 import asyncio
@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -24,16 +25,22 @@ from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
 from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-# Every product repository integrates on main; dev is no longer targeted.
+# Backend, AI and the Portal integrate on main; Epoch Platform integrates on dev.
 PROJECT_BRANCHES = {
     "EpochBackend": "main",
     "EpochAI": "main",
     "EpochClientPortal": "main",
+    "EpochPlatform": "dev",
 }
+# Behind the front door at the profile's backend_url, as behind api.<env>.epoch.trade's load
+# balancer: Backend, and Epoch Platform's general service for Files and Space.
+BACKEND_PORT = 9010
+PLATFORM_PORT = 9020
+FRONT_DOOR = Path(__file__).resolve().parent / "front_door.py"
 
 
 def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
-    """The default stack always uses the three primary sibling repositories."""
+    """The default stack always uses the primary sibling repositories."""
     config = tomllib.loads(config_file.read_text()) if config_file.exists() else {}
     paths = {
         "backend_binary": PROJECT_ROOT
@@ -41,6 +48,7 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
         "backend_env": PROJECT_ROOT / "EpochBackend/services/stratifyx/.env.local",
         "ai_dir": PROJECT_ROOT / "EpochAI",
         "ui_dir": PROJECT_ROOT / "EpochClientPortal",
+        "platform_dir": PROJECT_ROOT / "EpochPlatform",
     }
     unknown = set(config) - set(paths) - {"node_bin", "market_pages", "documents"}
     if unknown:
@@ -212,26 +220,30 @@ WORKER_TOKEN = "EPOCH_DOCUMENT_WORKER_TOKEN"
 
 
 def source_access(
-    state: Path, backend_url: str, backend_values: dict[str, str], ai_values: dict[str, str]
+    state: Path, api_url: str, backend_values: dict[str, str], ai_values: dict[str, str]
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Enable public web research and document URL capture for a local stack.
 
-    Backend and the agent share one private worker token, kept across restarts.
-    Web research also needs Exa and a recovery journal; the agent is the single
-    executor, so a private directory serves. AWS document reading (PDF, images,
-    DOCX) stays off unless its own settings are configured."""
+    Platform's Files and the agent's Files workers share one private worker token,
+    kept across restarts. The agent reaches Files, and the workers their routes,
+    through the local API origin's front door. Web research also needs Exa and a
+    recovery journal; the agent is the single executor, so a private directory
+    serves. AWS document reading (PDF, images, DOCX) stays off unless its own
+    settings are configured."""
     token = backend_values.get(WORKER_TOKEN) or ai_values.get(WORKER_TOKEN)
     if not token:
         path = state / "document-worker-token"
         if not path.is_file():
             write_private(path, secrets.token_urlsafe(48))
         token = path.read_text().strip()
-    ai = {WORKER_TOKEN: token, "EPOCH_DOCUMENT_BACKEND_URL": backend_url}
+    ai = {WORKER_TOKEN: token}
     if ai_values.get("EXA_API_KEY") and "EPOCH_WEB_RESEARCH_ENABLED" not in ai_values:
         ai["EPOCH_WEB_RESEARCH_ENABLED"] = "true"
         ai["EPOCH_WEB_RESEARCH_JOURNAL"] = str(private_dir(state / "ai/web-journal"))
-    # Operator settings win, except the token Backend must share.
-    return {WORKER_TOKEN: token}, {**ai, **ai_values, WORKER_TOKEN: token}
+    # Operator settings win, except the token Platform must share and where Files is:
+    # an agent .env naming another environment's Files must not split a local run.
+    files = {"EPOCH_DOCUMENT_BACKEND_URL": api_url, "EPOCH_FILES_WORKER_URL": api_url}
+    return {WORKER_TOKEN: token}, {**ai, **ai_values, WORKER_TOKEN: token, **files}
 
 
 DOCUMENT_SETTINGS = ("aws_profile", "account_id", "bucket")
@@ -520,6 +532,60 @@ def prepare_ui_build(
     return ("UI", command, ui, ui_env, stack.ui_url)
 
 
+def prepare_platform(
+    platform: Path,
+    node: str,
+    base: dict[str, str],
+    backend_values: dict[str, str],
+    files_access: dict[str, str],
+    project: Path,
+    commit: str,
+    state: Path,
+) -> tuple:
+    """Epoch Platform's general service, with Files and Space on local disk and no AWS account.
+
+    Files keeps its objects in the engine's personal content directory, where the local job store
+    reads saved datasets, and names studies from the engine's local definitions. The checkout's
+    TypeScript is compiled in place first (incremental; Git ignores the output)."""
+    log = state / "platform-build.log"
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        built = subprocess.run(
+            [node, "node_modules/typescript/bin/tsc", "-b"],
+            cwd=platform, env=base, stdout=stream, stderr=subprocess.STDOUT,
+        )
+    if built.returncode or not (platform / "apps/platform/dist/main.js").is_file():
+        raise ValueError(f"The Platform build failed. Inspect {log}.")
+    # No AWS credentials reach it: local Files must never fall back to a cloud store.
+    env = {key: value for key, value in base.items() if not key.startswith("AWS_")}
+    env.update({
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "AWS_EC2_METADATA_DISABLED": "true",
+        "AWS_REGION": REGION,
+        "EPOCH_PLATFORM_ROLE": "general",
+        "EPOCH_ENVIRONMENT": "local",
+        "EPOCH_PLATFORM_REVISION": commit,
+        "PORT": str(PLATFORM_PORT),
+        "COGNITO_USER_POOL_ID": POOL,
+        "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
+        "EPOCH_FILES_LOCAL_ROOT": str(project / "personal_content"),
+        "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
+        **files_access,
+    })
+    issuer = backend_values.get("EPOCH_TOKEN_ISSUER", "").strip()
+    if issuer:
+        # Delegated tokens from the local v1 host, which the local Backend signs.
+        env["EPOCH_TOKEN_ISSUER"] = issuer
+        env["EPOCH_TOKEN_JWKS_URL"] = f"http://127.0.0.1:{BACKEND_PORT}/api/v1/auth/jwks"
+    return (
+        "Platform",
+        [node, "apps/platform/dist/main.js"],
+        platform,
+        env,
+        f"http://127.0.0.1:{PLATFORM_PORT}/api/v1/platform/health",
+    )
+
+
 def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"Missing service environment file: {path}")
@@ -542,6 +608,16 @@ def local_ports(stack: Stack) -> list[int]:
         ports.append(parts.port)
     if len(set(ports)) != 3:
         raise ValueError("Backend, AI and UI need three distinct ports.")
+    return ports
+
+
+def service_ports(stack: Stack) -> list[int]:
+    """The profile's ports and the two behind the front door."""
+    ports = local_ports(stack) + [BACKEND_PORT, PLATFORM_PORT]
+    if len(set(ports)) != len(ports):
+        raise ValueError(
+            f"Ports {BACKEND_PORT} and {PLATFORM_PORT} are reserved for Backend and Platform behind the front door."
+        )
     return ports
 
 
@@ -572,6 +648,7 @@ def prepare(
             flush=True,
         )
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
+    platform = paths["platform_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
         if not os.access(executable, os.X_OK):
@@ -580,7 +657,9 @@ def prepare(
             )
     if not (ui / "node_modules").is_dir():
         raise ValueError(f"Install UI dependencies with pnpm in {ui} first.")
-    ports = local_ports(stack)
+    if not (platform / "node_modules/typescript").is_dir():
+        raise ValueError(f"Install Platform dependencies with pnpm in {platform} first.")
+    ports = service_ports(stack)
     # Do not pass the caller's token or password to any server.
     base = {
         k: v
@@ -646,7 +725,7 @@ def prepare(
         **base,
         **backend_values,
         **common,
-        "PORT": str(ports[0]),
+        "PORT": str(BACKEND_PORT),
         "EPOCH_SKIP_LOAD_JOBS": "0",
         "EPOCH_PROJECT_DIR": str(private_dir(state / "backend")),
         "EPOCH_JOB_STAGING_DIR": str(private_dir(state / "backend/staging")),
@@ -671,8 +750,7 @@ def prepare(
         revision = "local-" + revisions["EpochAI"]["commit"]
     ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
-    backend_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
-    backend_env.update(backend_access)
+    files_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
     ai_values = {**ai_values, **document_access(config.get("documents", {}))}
     check_document_access(ai_values, base)
     print(
@@ -680,6 +758,15 @@ def prepare(
         + ("on" if ai_values.get("EPOCH_WEB_RESEARCH_ENABLED", "").lower() in ("1", "true") else "off")
         + "; document URL capture: on; AWS document reading: "
         + ("on" if ai_values.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") == "true" else "off"),
+        flush=True,
+    )
+    platform_service = prepare_platform(
+        platform, node, base, backend_values, files_access,
+        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state,
+    )
+    print(
+        "Files and Space: Epoch Platform, on local disk in "
+        f"{platform_service[3]['EPOCH_FILES_LOCAL_ROOT']}",
         flush=True,
     )
     (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
@@ -757,10 +844,18 @@ def prepare(
     return [
         (
             "Backend",
-            [str(binary), "--port", str(ports[0])],
+            [str(binary), "--port", str(BACKEND_PORT)],
             state / "backend",
             backend_env,
-            stack.backend_url + "/api/v1/health",
+            f"http://127.0.0.1:{BACKEND_PORT}/api/v1/health",
+        ),
+        platform_service,
+        (
+            "FrontDoor",
+            [sys.executable, str(FRONT_DOOR), str(ports[0]), str(BACKEND_PORT), str(PLATFORM_PORT)],
+            state,
+            base,
+            stack.backend_url + "/api/v1/platform/health",
         ),
         ai_service,
         prepare_ui_build(
@@ -872,7 +967,7 @@ def main() -> None:
             stack = Stack.load(
                 args.environments, "local-up" if args.ai_runtime == "up" else "local"
             )
-            check_ports(local_ports(stack))
+            check_ports(service_ports(stack))
             services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime)
             bearer = (
                 login(args.email)
@@ -903,7 +998,7 @@ def main() -> None:
             )
             print(
                 f"Ready: {stack.ui_url}\nLocal CLI login is cached. Browser login uses the same account.\n"
-                "Ctrl+C stops these three services. No research has been started.",
+                "Ctrl+C stops these services. No research has been started.",
                 flush=True,
             )
             while all(child.poll() is None for child in children):
