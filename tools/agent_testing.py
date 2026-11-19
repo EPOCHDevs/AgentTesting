@@ -142,6 +142,10 @@ class Stack:
     # The LangSmith project this environment's agent traces to, when the
     # profile names one; otherwise trace collection uses LANGSMITH_PROJECT.
     langsmith_project: str | None = None
+    # The Portal's sign-in pool, for a Portal that publishes no runtime config
+    # (dev builds carry it in their bundle instead). Public values, not secrets.
+    user_pool_id: str | None = None
+    user_pool_client_id: str | None = None
 
     def identity(self) -> ServiceIdentity:
         # Preserve the established endpoint receipt shape. Profile selection is
@@ -199,9 +203,18 @@ class Stack:
         return local_auth.token_path(cast(str, urlsplit(self.ui_url).hostname))
 
     def user_pool(self) -> local_auth.UserPool:
-        """The sign-in pool the selected Portal publishes; local's is fixed."""
+        """The sign-in pool the selected Portal publishes; local's is fixed.
+
+        A Portal without published runtime config (a dev build) signs in with the
+        pool its profile names, if it names one.
+        """
         if self.is_local:
             return local_auth.LOCAL
+        declared = (
+            local_auth.UserPool(self.user_pool_id, self.user_pool_client_id)
+            if self.user_pool_id and self.user_pool_client_id
+            else None
+        )
         try:
             response = httpx.get(
                 self.ui_url.rstrip("/") + "/epoch-runtime-config.json", timeout=15
@@ -211,9 +224,15 @@ class Stack:
             auth = published["amplifyOutputs"]["auth"]
             pool = local_auth.UserPool(auth["user_pool_id"], auth["user_pool_client_id"])
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            if declared:
+                return declared
             raise ValueError(
-                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; set {self.token_env}."
+                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; name it in the profile (user_pool_id, user_pool_client_id) or set {self.token_env}."
             ) from None
+        if declared and declared != pool:
+            raise ValueError(
+                f"The {self.environment} Portal publishes a different sign-in pool than environments.toml; update the profile before signing in."
+            )
         profile = {
             "backendUrl": self.backend_url,
             "agentUrl": self.ai_url,
