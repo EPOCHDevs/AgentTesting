@@ -102,6 +102,8 @@ class Fixture:
     notes: tuple[str, ...] = ()
     create_cost: str | None = None
     derive: Derived | None = None
+    # What this fixture's export must (not) show, beyond the generic checks.
+    expect: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,7 @@ def _script(fixture_id: str, spec: Mapping[str, object], folder: Path) -> Script
 
 
 DERIVED_KINDS = ("monte_carlo", "parameter_search")
+EXPECT_KEYS = {"absent_text", "notices", "sections_with_tables"}
 
 
 def load_catalog(path: Path = CATALOG) -> Catalog:
@@ -184,6 +187,9 @@ def load_catalog(path: Path = CATALOG) -> Catalog:
                 raise ValueError(f"{fixture_id}: Monte Carlo needs a parent fixture; a search needs a script")
         if match is None and script is None:
             raise ValueError(f"{fixture_id}: give a match rule, a script, or both")
+        expect = item.get("expect", {})
+        if set(expect) - EXPECT_KEYS:
+            raise ValueError(f"{fixture_id}: unknown expect keys {sorted(set(expect) - EXPECT_KEYS)}")
         fixtures.append(
             Fixture(
                 id=fixture_id,
@@ -194,6 +200,7 @@ def load_catalog(path: Path = CATALOG) -> Catalog:
                 notes=tuple(item.get("notes", [])),
                 create_cost=item.get("create_cost"),
                 derive=derive,
+                expect=expect,
             )
         )
     for fixture in fixtures:
@@ -370,6 +377,9 @@ class Profile:
     briefings: int = 0
     notes: int = 0
     ai_text_skipped: bool = False
+    # AI text that failed or is unavailable for another reason, and Backend's reasons for it.
+    ai_text_unavailable: bool = False
+    ai_text_errors: list[str] = field(default_factory=list)
     cards: int = 0
     charts: list[dict[str, object]] = field(default_factory=list)
     tables: list[dict[str, object]] = field(default_factory=list)
@@ -415,6 +425,8 @@ class Profile:
             "briefings": self.briefings,
             "notes": self.notes,
             "ai_text_skipped": self.ai_text_skipped,
+            "ai_text_unavailable": self.ai_text_unavailable,
+            "ai_text_errors": self.ai_text_errors,
             "cards": self.cards,
             "chart_kinds": self.chart_kinds,
             "exhibit_categories": self.exhibit_categories,
@@ -467,6 +479,14 @@ def profile(
         and section["executive_summary"].get("briefing")
     )
     result.ai_text_skipped = any(skipped_ai_text(schema) for schema in schemas.values())
+    for part in [*(content.get("sections") or []), *(content.get("categories") or [])]:
+        state = part.get("interpretation") if isinstance(part, Mapping) else None
+        if not isinstance(state, Mapping) or skipped_ai_text(state):
+            continue
+        if state.get("status") not in ("Ready", "Generating"):
+            result.ai_text_unavailable = True
+            if str(state.get("error") or "").strip() and state["error"] not in result.ai_text_errors:
+                result.ai_text_errors.append(str(state["error"]))
     charts: dict[tuple[str, str], dict[str, object]] = {}
     tables: dict[tuple[str, object], dict[str, object]] = {}
     for read_category, schema in schemas.items():

@@ -278,6 +278,8 @@ class Terminal:
             "export": strip_images(export),
         }
         found["dom"] = page.evaluate(DOM_SCRIPT, "describe")
+        # The printed text, so text that must never reach a file can be looked for.
+        found["article_text"] = page.locator("article[data-print-layout]").inner_text()
         found["images"] = page.evaluate(DOM_SCRIPT, "imageStats")
         page.screenshot(path=str(out / "print-screen.png"))
         overflow = {}
@@ -303,8 +305,17 @@ class Terminal:
             }
         found["pdf"] = pdfs
         found["page1"] = render_page1(out / "export-a4.pdf", out / "page-1.png", page)
+        found["pdf_text"] = pdf_text(out / "export-a4.pdf")
         (out / "export-data.json").write_text(json.dumps(found["export"], indent=1))
         return found
+
+
+def pdf_text(pdf: Path) -> str | None:
+    """The A4 PDF's text (poppler's pdftotext), or None when it isn't installed."""
+    if not shutil.which("pdftotext"):
+        return None
+    done = subprocess.run(["pdftotext", str(pdf), "-"], capture_output=True, text=True, timeout=120)
+    return done.stdout if done.returncode == 0 else None
 
 
 def render_page1(pdf: Path, png: Path, page: Page) -> dict[str, object]:

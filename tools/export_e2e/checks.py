@@ -7,6 +7,7 @@ so dates are formatted in UTC here too.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -19,6 +20,9 @@ MENU_NOTE = "A file is a copy: it can’t be updated. To keep people up to date,
 PDF_DESCRIPTION = "The dashboard as pages, ready to print"
 PRINT_ROW_LIMIT = 200
 USAGE_LIMIT_NOTICE = "AI summary not generated: usage limit reached"
+AI_TEXT_UNAVAILABLE_NOTICE = "AI summary not available for this run."
+# Each notice's text, by its reason. "unavailable" is one notice for the run, under the cover.
+NOTICE_TEXT = {"usage_limit": USAGE_LIMIT_NOTICE, "unavailable": AI_TEXT_UNAVAILABLE_NOTICE}
 CHART_FAILED = "This chart couldn’t load."
 GRAPH_MESSAGE = "Relationship graphs aren’t included in exports yet."
 NO_DASHBOARD_MESSAGE = "This run has no dashboard to export."
@@ -93,9 +97,11 @@ def all_blocks(export: Mapping[str, object]) -> list[Mapping[str, object]]:
     ]
 
 
-def notices(export: Mapping[str, object]) -> list[Mapping[str, object]]:
+def notices(export: Mapping[str, object], reason: str | None = None) -> list[Mapping[str, object]]:
+    """The export's AI text notices, at the top and in sections; older exports have no reason."""
     found = list(export.get("notices") or [])  # type: ignore[arg-type]
-    return found + [b for b in all_blocks(export) if b.get("kind") == "notice"]
+    found += [b for b in all_blocks(export) if b.get("kind") == "notice"]
+    return [n for n in found if reason is None or n.get("reason", "usage_limit") == reason]
 
 
 def norm(value: object) -> object:
@@ -331,10 +337,14 @@ def check_export_data(obs: Mapping[str, object], run: Profile | None) -> Result:
         period = format_period(run.period)
         if study.get("period") != period:
             problems.append(f"period {study.get('period')!r}, the run's is {period!r}")
-        if run.ai_text_skipped and not notices(export):
+        if run.ai_text_skipped and not notices(export, "usage_limit"):
             problems.append("Backend skipped AI text for the usage limit, but the export has no notice")
-        if notices(export) and not run.ai_text_skipped:
+        if notices(export, "usage_limit") and not run.ai_text_skipped:
             problems.append("the export has a usage-limit notice Backend did not record")
+        if run.ai_text_unavailable and not notices(export, "unavailable"):
+            problems.append("Backend has failed AI text, but the export has no 'unavailable' notice")
+        if notices(export, "unavailable") and not run.ai_text_unavailable:
+            problems.append("the export has an 'unavailable' notice, but Backend's AI text didn't fail")
     sections = export.get("sections") or []
     if problems:
         return Result("export-data", FAIL, "; ".join(problems))
@@ -528,26 +538,90 @@ def check_row_limit(obs: Mapping[str, object]) -> Result:
 
 
 def check_notices(obs: Mapping[str, object], run: Profile | None) -> Result:
+    """AI text notices: usage-limit ones where Backend skipped text, and one 'unavailable' notice
+    under the cover when other AI text failed; each with its own text, as the page prints it."""
     export, dom = obs.get("export"), obs.get("dom")
     if not isinstance(export, Mapping) or not isinstance(dom, Mapping):
-        return Result("usage-limit-notice", SKIP, "No export data")
+        return Result("ai-text-notices", SKIP, "No export data")
     found = notices(export)
-    expected = bool(run and run.ai_text_skipped)
-    wrong = [n for n in found if n.get("text") != USAGE_LIMIT_NOTICE]
+    wrong = [n for n in found if n.get("text") != NOTICE_TEXT.get(str(n.get("reason", "usage_limit")))]
     top = list(export.get("notices") or [])  # type: ignore[arg-type]
     drawn = [n for n in dom.get("notices") or [] if n]  # type: ignore[union-attr]
+    unavailable = notices(export, "unavailable")
     problems = []
     if wrong:
-        problems.append(f"notice text {wrong[0].get('text')!r}")
+        problems.append(f"notice {wrong[0].get('reason')!r} reads {wrong[0].get('text')!r}")
     if drawn != [n.get("text") for n in top]:
         problems.append(f"page notices {drawn}, expected {[n.get('text') for n in top]}")
-    if expected and not found:
+    if run is not None and run.ai_text_skipped and not notices(export, "usage_limit"):
         problems.append("Backend skipped AI text for the usage limit, but no notice prints")
+    if run is not None and run.ai_text_unavailable and len(unavailable) != 1:
+        problems.append(f"Backend's AI text failed: expected one 'unavailable' notice, found {len(unavailable)}")
+    if any(n not in top for n in unavailable):
+        problems.append("an 'unavailable' notice prints inside a section, not under the cover")
     if problems:
-        return Result("usage-limit-notice", FAIL, "; ".join(problems))
+        return Result("ai-text-notices", FAIL, "; ".join(problems))
     if found:
-        return Result("usage-limit-notice", PASS, f"{len(found)} usage-limit notices print {USAGE_LIMIT_NOTICE!r}")
-    return Result("usage-limit-notice", PASS, "No AI text was skipped; no notice expected or printed")
+        texts = ", ".join(sorted({repr(n.get("text")) for n in found}))
+        return Result("ai-text-notices", PASS, f"{len(found)} notices print {texts}")
+    return Result("ai-text-notices", PASS, "No AI text was skipped or failed; no notice expected or printed")
+
+
+def check_internal_reasons(obs: Mapping[str, object], fixture: Fixture, run: Profile | None) -> Result:
+    """Backend's own reasons for failed AI text (written for engineers) never reach the file."""
+    export = obs.get("export")
+    if not isinstance(export, Mapping):
+        return Result("no-internal-reasons", SKIP, "No export data")
+    # Each sentence of Backend's reasons, so a partial copy is caught too, and the fixture's own.
+    sentences = [
+        sentence.strip(" .")
+        for error in (run.ai_text_errors if run else [])
+        for sentence in re.split(r"(?<=[.;:])\s+", " ".join(error.split()))
+        if len(sentence.split()) >= 4
+    ]
+    phrases = [*sentences, *fixture.expect.get("absent_text", [])]  # type: ignore[misc]
+    phrases = list(dict.fromkeys(" ".join(str(p).split()) for p in phrases if str(p).strip()))
+    if not phrases:
+        return Result("no-internal-reasons", SKIP, "Backend recorded no AI text failure for this run")
+    places = {
+        "JSON": json.dumps(export, ensure_ascii=False),
+        "page": str(obs.get("article_text") or ""),
+        "PDF": str(obs.get("pdf_text") or ""),
+    }
+    leaks = [
+        f"{where} contains {phrase[:60]!r}"
+        for phrase in phrases
+        for where, text in places.items()
+        if phrase.casefold() in " ".join(text.split()).casefold()
+    ]
+    if leaks:
+        return Result("no-internal-reasons", FAIL, "; ".join(leaks[:6]))
+    checked = ", ".join(where for where, text in places.items() if text)
+    return Result("no-internal-reasons", PASS, f"None of {len(phrases)} Backend reasons appear in the {checked}")
+
+
+def check_expectations(obs: Mapping[str, object], fixture: Fixture) -> Result:
+    """A fixture's own expectations: notice counts by reason and sections that print tables."""
+    export, dom = obs.get("export"), obs.get("dom")
+    if not isinstance(export, Mapping) or not isinstance(dom, Mapping):
+        return Result("fixture-expectations", SKIP, "No export data")
+    problems, facts = [], []
+    for reason, count in (fixture.expect.get("notices") or {}).items():  # type: ignore[union-attr]
+        found = len(notices(export, reason))
+        facts.append(f"{found} {reason} notice(s)")
+        if found != count:
+            problems.append(f"{found} {reason!r} notices, expected {count}")
+    for title in fixture.expect.get("sections_with_tables") or []:  # type: ignore[union-attr]
+        section = next((s for s in export.get("sections") or [] if norm(s.get("title")) == norm(title)), None)  # type: ignore[union-attr]
+        tables = [b for b in (section or {}).get("blocks") or [] if b.get("kind") == "table" and b.get("rows")]
+        drawn = next((s for s in dom.get("sections") or [] if s.get("title") == norm(title)), None)  # type: ignore[union-attr]
+        printed = sum(len((u.get("block") or {}).get("tables") or []) for u in (drawn or {}).get("units") or [])
+        facts.append(f"{title!r}: {len(tables)} tables, {printed} printed")
+        if not tables or not printed:
+            problems.append(f"section {title!r} exports {len(tables)} tables with rows and prints {printed}")
+    if problems:
+        return Result("fixture-expectations", FAIL, "; ".join(problems))
+    return Result("fixture-expectations", PASS, "; ".join(facts))
 
 
 def check_cover(obs: Mapping[str, object]) -> Result:
@@ -652,7 +726,7 @@ def check_shape(obs: Mapping[str, object], fixture: Fixture, run: Profile | None
         printed = len(export.get("sections") or [])  # type: ignore[arg-type]
         if minimum and printed < minimum:
             problems.append(f"{printed} sections printed for {run.category_count} categories")
-    if rule.get("ai_text_skipped") and not notices(export):
+    if rule.get("ai_text_skipped") and not notices(export, "usage_limit"):
         problems.append("no usage-limit notice exported")
     if problems:
         return Result("fixture-shape", FAIL, "; ".join(problems))
@@ -705,6 +779,8 @@ def evaluate(
             check_words(obs),
             check_row_limit(obs),
             check_notices(obs, run),
+            check_internal_reasons(obs, fixture, run),
+            *([check_expectations(obs, fixture)] if fixture.expect.get("notices") or fixture.expect.get("sections_with_tables") else []),
             check_pdfs(obs),
         ]
     results += [check_clean(obs), check_no_ai(obs)]

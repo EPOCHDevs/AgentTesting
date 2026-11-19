@@ -406,6 +406,7 @@ def test_a_faithful_export_passes_every_check() -> None:
     assert {r.check: r.status for r in results if r.status != "pass"} == {
         "format-markdown": "skip",
         "format-space": "skip",
+        "no-internal-reasons": "skip",  # Backend recorded no AI text failure.
     }
     images = next(r for r in results if r.check == "chart-images")
     assert images.notes and "Relationship graphs" in images.notes[0]
@@ -481,15 +482,15 @@ def test_usage_limit_notices_must_match_backend_and_print() -> None:
     skipped = copy.deepcopy(PROFILE)
     skipped.ai_text_skipped = True
     detail = failing(observation(), skipped)
-    assert "no notice prints" in detail["usage-limit-notice"]
+    assert "no notice prints" in detail["ai-text-notices"]
     assert "the export has no notice" in detail["export-data"]
     obs = observation()
     notice = {"kind": "notice", "reason": "usage_limit", "text": checks.USAGE_LIMIT_NOTICE}
     obs["export"]["notices"] = [notice]
     obs["dom"]["notices"] = [checks.USAGE_LIMIT_NOTICE]
-    assert statuses(obs, run=skipped)["usage-limit-notice"] == "pass"
+    assert statuses(obs, run=skipped)["ai-text-notices"] == "pass"
     obs["dom"]["notices"] = []
-    assert "page notices []" in failing(obs, skipped)["usage-limit-notice"]
+    assert "page notices []" in failing(obs, skipped)["ai-text-notices"]
 
 
 def test_cover_title_and_pdf_size_are_checked() -> None:
@@ -806,3 +807,98 @@ def test_a_failed_paid_run_is_reported_not_retried(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="failed"):
         backend_module.create_paid_fixture(failing_backend, state, catalog.get("monte-carlo"), RUN, log=lambda _: None, settle=0)  # type: ignore[arg-type]
     assert len([c for c in failing_backend.calls if c.startswith("monte carlo")]) == 1
+
+
+
+# --- #286's polish: balanced column parts, one "unavailable" notice, no internal reasons ------------
+
+BALANCED_PARTS = [
+    part("Columns 1–7 of 24", NAMES[0:7]),
+    part("Columns 8–13 of 24", ["C1", *NAMES[7:13]]),
+    part("Columns 14–19 of 24", ["C1", *NAMES[13:19]]),
+    part("Columns 20–24 of 24", ["C1", *NAMES[19:24]]),
+]
+
+
+def test_balanced_column_parts_with_own_slice_labels_pass() -> None:
+    obs = wide_observation(copy.deepcopy(BALANCED_PARTS))
+    assert statuses(obs)["sections-and-blocks"] == "pass"
+    ten = [{"name": n} for n in NAMES[:10]]
+    halves = [part("Columns 1–6 of 10", NAMES[:6]), part("Columns 7–10 of 10", ["C1", *NAMES[6:10]])]
+    assert checks._table_parts_mismatch({"title": "Forecasts", "columns": ten, "rows": [[]] * 6}, halves) is None
+    gap = copy.deepcopy(BALANCED_PARTS)
+    gap[2]["part"]["label"], gap[2]["headers"] = "Columns 15–19 of 24", ["C1", *NAMES[14:19]]
+    assert "parts show columns" in failing(wide_observation(gap))["sections-and-blocks"]
+
+
+MONTE_CARLO = Fixture(
+    "monte-carlo",
+    "x",
+    expect={
+        "absent_text": ["retired post-run output contract"],
+        "notices": {"unavailable": 1},
+        "sections_with_tables": ["Rows"],
+    },
+)
+REASON = "This run was admitted under the retired post-run output contract. Its saved results remain readable."
+
+
+def failed_text_run() -> Profile:
+    run = copy.deepcopy(PROFILE)
+    run.ai_text_unavailable = True
+    run.ai_text_errors = [REASON]
+    return run
+
+
+def unavailable_observation() -> dict:
+    obs = observation()
+    obs["export"]["notices"] = [{"kind": "notice", "reason": "unavailable", "text": checks.AI_TEXT_UNAVAILABLE_NOTICE}]
+    obs["dom"]["notices"] = [checks.AI_TEXT_UNAVAILABLE_NOTICE]
+    obs["article_text"] = "Election returns\nAI summary not available for this run.\nOverview"
+    obs["pdf_text"] = "Election returns AI summary not available for this run."
+    return obs
+
+
+def test_failed_ai_text_prints_one_unavailable_notice_and_no_internal_reason() -> None:
+    result = {r.check: r for r in checks.evaluate(unavailable_observation(), MONTE_CARLO, FORMATS, failed_text_run())}
+    for name in ("ai-text-notices", "no-internal-reasons", "fixture-expectations", "export-data"):
+        assert result[name].status == "pass", (name, result[name].detail)
+    assert "1 unavailable notice(s)" in result["fixture-expectations"].detail
+
+
+def test_a_leaked_backend_reason_or_a_missing_or_doubled_notice_fails() -> None:
+    leaked = unavailable_observation()
+    leaked["pdf_text"] += "\nThis run was admitted under the retired post-run\noutput contract."
+    found = {r.check: r for r in checks.evaluate(leaked, MONTE_CARLO, FORMATS, failed_text_run())}["no-internal-reasons"]
+    assert found.status == "fail" and "PDF contains 'This run was admitted under the retired post-run output" in found.detail
+    partial = unavailable_observation()
+    partial["article_text"] += " Its saved results remain readable"
+    assert "page contains 'Its saved results remain readable'" in failing(partial, failed_text_run())["no-internal-reasons"]
+    missing = observation()
+    detail = {r.check: r.detail for r in checks.evaluate(missing, MONTE_CARLO, FORMATS, failed_text_run()) if r.status == "fail"}
+    assert "expected one 'unavailable' notice, found 0" in detail["ai-text-notices"]
+    assert "no 'unavailable' notice" in detail["export-data"]
+    assert "0 'unavailable' notices, expected 1" in detail["fixture-expectations"]
+    doubled = unavailable_observation()
+    doubled["export"]["sections"][0]["blocks"].append({"kind": "notice", "reason": "unavailable", "text": checks.AI_TEXT_UNAVAILABLE_NOTICE})
+    assert "found 2" in failing(doubled, failed_text_run())["ai-text-notices"]
+    wrong = unavailable_observation()
+    wrong["export"]["notices"][0]["text"] = checks.USAGE_LIMIT_NOTICE
+    assert "notice 'unavailable' reads" in failing(wrong, failed_text_run())["ai-text-notices"]
+
+
+def test_an_expected_section_without_tables_fails() -> None:
+    obs = unavailable_observation()
+    obs["export"]["sections"][1]["blocks"] = [b for b in obs["export"]["sections"][1]["blocks"] if b["kind"] != "table"]
+    obs["dom"]["sections"][1]["units"].pop(0)
+    detail = {r.check: r.detail for r in checks.evaluate(obs, MONTE_CARLO, FORMATS, failed_text_run()) if r.status == "fail"}
+    assert "section 'Rows' exports 0 tables with rows and prints 0" in detail["fixture-expectations"]
+
+
+def test_the_monte_carlo_fixture_carries_its_expectations() -> None:
+    expect = load_catalog().get("monte-carlo").expect
+    assert expect["notices"] == {"unavailable": 1}
+    assert "retired post-run output contract" in expect["absent_text"]
+    assert expect["sections_with_tables"] == ["Method and statistical checks"]
+    profile_json = json.loads(json.dumps(failed_text_run().to_json()))
+    assert Profile.from_json(profile_json).ai_text_errors == [REASON]
