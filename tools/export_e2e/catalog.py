@@ -68,6 +68,31 @@ class Script:
 
 
 @dataclass(frozen=True)
+class Derived:
+    """A run the suite may create only with the owner's explicit approval of its AI cost.
+
+    `monte_carlo` derives from the run pinned to the `parent` fixture; `parameter_search`
+    searches a backtest definition made from `script`.
+    """
+
+    kind: str
+    parent: str | None = None
+    options: Mapping[str, object] = field(default_factory=dict)
+    script: Script | None = None
+    search: Mapping[str, object] = field(default_factory=dict)
+
+    def spec_hash(self) -> str:
+        spec = {
+            "kind": self.kind,
+            "parent": self.parent,
+            "options": self.options,
+            "search": self.search,
+            "script": self.script.spec_hash() if self.script else None,
+        }
+        return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
 class Fixture:
     id: str
     shape: str
@@ -76,6 +101,7 @@ class Fixture:
     script: Script | None = None
     notes: tuple[str, ...] = ()
     create_cost: str | None = None
+    derive: Derived | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +132,27 @@ def check_creatable(source: str) -> None:
         )
 
 
+def _script(fixture_id: str, spec: Mapping[str, object], folder: Path) -> Script:
+    script_path = (folder / str(spec["path"])).resolve()
+    if folder.resolve() not in script_path.parents or not script_path.is_file():
+        raise ValueError(f"{fixture_id}: script {spec['path']} is not in the campaign")
+    period = spec["period"]
+    assert isinstance(period, Mapping)
+    script = Script(
+        path=script_path,
+        name=str(spec["name"]),
+        description=str(spec["description"]),
+        assets=tuple(spec.get("assets", [])),  # type: ignore[arg-type]
+        start=str(period["start"]),
+        end=str(period["end"]),
+    )
+    check_creatable(script.source())
+    return script
+
+
+DERIVED_KINDS = ("monte_carlo", "parameter_search")
+
+
 def load_catalog(path: Path = CATALOG) -> Catalog:
     raw = json.loads(path.read_text())
     seen: set[str] = set()
@@ -118,21 +165,23 @@ def load_catalog(path: Path = CATALOG) -> Catalog:
         match = item.get("match")
         if match is not None and set(match) - RULE_KEYS:
             raise ValueError(f"{fixture_id}: unknown match keys {sorted(set(match) - RULE_KEYS)}")
-        script = None
-        if "script" in item:
-            spec = item["script"]
-            script_path = (path.parent / spec["path"]).resolve()
-            if path.parent.resolve() not in script_path.parents or not script_path.is_file():
-                raise ValueError(f"{fixture_id}: script {spec['path']} is not in the campaign")
-            script = Script(
-                path=script_path,
-                name=spec["name"],
-                description=spec["description"],
-                assets=tuple(spec.get("assets", [])),
-                start=spec["period"]["start"],
-                end=spec["period"]["end"],
+        script = _script(fixture_id, item["script"], path.parent) if "script" in item else None
+        derive = None
+        if "derive" in item:
+            spec = item["derive"]
+            if spec.get("kind") not in DERIVED_KINDS or script is not None:
+                raise ValueError(f"{fixture_id}: derive needs a kind of {DERIVED_KINDS} and no script")
+            derive = Derived(
+                kind=spec["kind"],
+                parent=spec.get("parent"),
+                options=spec.get("options", {}),
+                script=_script(fixture_id, spec["script"], path.parent) if "script" in spec else None,
+                search=spec.get("search", {}),
             )
-            check_creatable(script.source())
+            if (derive.kind == "monte_carlo" and not derive.parent) or (
+                derive.kind == "parameter_search"
+            ) != bool(derive.script):
+                raise ValueError(f"{fixture_id}: Monte Carlo needs a parent fixture; a search needs a script")
         if match is None and script is None:
             raise ValueError(f"{fixture_id}: give a match rule, a script, or both")
         fixtures.append(
@@ -144,8 +193,13 @@ def load_catalog(path: Path = CATALOG) -> Catalog:
                 script=script,
                 notes=tuple(item.get("notes", [])),
                 create_cost=item.get("create_cost"),
+                derive=derive,
             )
         )
+    for fixture in fixtures:
+        parent = fixture.derive.parent if fixture.derive else None
+        if parent and parent not in seen:
+            raise ValueError(f"{fixture.id}: no parent fixture {parent!r}")
     formats = tuple(
         Format(f["id"], f["menu_label"], bool(f["implemented"]), tuple(f.get("issues", [])))
         for f in raw["formats"]

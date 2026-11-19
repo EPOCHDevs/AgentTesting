@@ -16,6 +16,14 @@ def render(summary: Mapping[str, object]) -> str:
         f"# Export end-to-end: {summary['attempt']}",
         "",
         f"- Environment: {summary['environment']} (Terminal {summary['ui_url']}, Backend {summary['backend_url']})",
+        *(
+            [
+                f"- **Terminal override:** {summary['ui_url']} replaces {summary['ui_url_override_of']}; "
+                f"the Backend, sign-in and fixtures are {summary['environment']}'s. These are not {summary['environment']} Terminal results."
+            ]
+            if summary.get("ui_url_override_of")
+            else []
+        ),
         f"- Started {summary['started_at']}, finished {summary.get('finished_at', '—')}",
         f"- Suite commit {summary.get('suite_commit', 'unknown')}; Chrome {summary.get('chrome', 'unknown')}; Playwright {summary.get('playwright', 'unknown')}",
         "- Browser timezone UTC; dates on the cover and in the file name are UTC.",
@@ -104,5 +112,13 @@ def render(summary: Mapping[str, object]) -> str:
                     f"{m['meter']} {m['used']}/{m['limit']}" for m in usage.get("meters", [])  # type: ignore[union-attr]
                 )
                 lines.append(f"- {label.replace('_', ' ')} ({usage.get('read_at')}): {meters}")
+        paid: Mapping[str, Mapping[str, object]] = cost.get("paid_runs") or {}  # type: ignore[assignment]
+        for fixture, run in paid.items():
+            moved = {k: v for k, v in (run.get("usage_delta") or {}).items() if v}  # type: ignore[union-attr]
+            lines.append(
+                f"- {fixture}: {run.get('kind')} run {run.get('run_id')} ({run.get('status')}), "
+                f"created {run.get('run_requested_at')} with the owner's approval of its AI cost; "
+                f"meters moved {moved or 'by nothing'} from before the request to a minute after it settled."
+            )
     lines.append("")
     return "\n".join(lines)

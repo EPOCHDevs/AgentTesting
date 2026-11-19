@@ -1,0 +1,20 @@
+# Export end-to-end fixture: the parent of the suite's one tuning run. It is the
+# backtest fixture's script on dev (buy at the first open and hold, ENG-2952) with its
+# allocation made tunable on a two-point grid (50% and 100%), the smallest search that
+# still gives a tuning result page. Its assets are the backtest fixture's as-run assets. A parameter search's report text is written by EpochAI
+# on the owner's study_ai allowance, so the suite only creates it with --allow-ai-cost.
+allocation = tune_space(50.0, 100.0, default=100.0, step=50.0, label="Allocation (%)")
+src = study_assets(target_timeframe=1D, lookback=1)
+always_long = broadcast_onto(True, onto=src.c)
+full_allocation = broadcast_onto(allocation, onto=src.c)
+gross_limit = broadcast_onto(1.0, onto=src.c)
+book = execution(policy=ExecutionPolicy(
+    signal=SignalOptions(market_timing=CurrentBarOpen, initialize_at_start=True),
+    sizing=SizingOptions(type=percent, rebalance=False),
+    entry=EntryOptions(type=Market),
+    limits=ExposureCapOptions(mode=gross)
+))(
+    long_entry=always_long,
+    size=full_allocation,
+    max_leverage=gross_limit
+)

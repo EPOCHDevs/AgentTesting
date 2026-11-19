@@ -272,7 +272,14 @@ checks the result in headless Chrome. The fixtures are listed in
 .venv/bin/python -m tools.export_e2e --env dev prepare                  # pin or create runs only
 .venv/bin/python -m tools.export_e2e --env dev inventory --refresh      # which runs fit which shape
 .venv/bin/python -m tools.export_e2e recheck ATTEMPT                    # re-judge saved evidence offline
+.venv/bin/python -m tools.export_e2e --env dev run --ui-url http://localhost:3002
 ```
+
+`--ui-url` drives a Terminal on this machine, for example a Vite dev server of an
+unmerged branch built against the dev API, with dev's Backend, sign-in and
+fixtures. Only a loopback origin is accepted, because the browser is signed in
+there. The attempt is named after the override and records it, so its results
+aren't read as dev's.
 
 It uses the installed Google Chrome (`channel="chrome"`); it never downloads a
 browser. Sign in first with `tools.agent_testing --env dev login`. The browser
@@ -290,8 +297,11 @@ fails when the menu offers it but the suite has no check for it yet.
 The suite reuses the owner's existing runs where it can. A shape that no
 existing run has comes from a script in `campaigns/export-e2e/scripts`. Those
 scripts are research-only, source-free and without `llm_call`, so Backend makes
-no model call for them. Backtests, Monte Carlo and tuning runs are never
-created, because their report text is charged to the owner's AI allowance.
+no model call for them. The report text of backtests, Monte Carlo and tuning
+runs is charged to the owner's AI allowance. The suite never creates a backtest,
+and creates a Monte Carlo or tuning run only when the owner approves the cost:
+`prepare --allow-ai-cost monte-carlo` (or `tuning`) makes one, and reads the
+usage meters before the request and a minute after the run settles.
 Pinned and created run ids are kept per environment in the git-ignored
 `.artifacts/export-e2e/state-<env>.json`, so a rerun reuses them and never
 makes duplicates.

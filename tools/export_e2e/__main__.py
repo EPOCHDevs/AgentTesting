@@ -27,8 +27,8 @@ from typing import get_args
 
 from tools.agent_testing import ROOT, Environment, Stack
 
-from . import checks, report
-from .backend import Backend, State, create_fixture, locked, now, owner_of
+from . import checks, report, target
+from .backend import Backend, State, create_fixture, create_paid_fixture, locked, now, owner_of
 from .catalog import CATALOG, Catalog, Fixture, Profile, choose, load_catalog, matches
 
 INVENTORY_MAX_AGE = 6 * 3600
@@ -51,11 +51,16 @@ class Resolver:
         create: bool,
         refresh: bool,
         log: Callable[[str], None],
+        allow_ai_cost: frozenset[str] = frozenset(),
     ):
         self.catalog, self.backend, self.state = catalog, backend, state
         self.inventory_path, self.create, self.refresh, self.log = inventory_path, create, refresh, log
+        # Fixtures whose AI cost the owner approved for this invocation (Monte Carlo, tuning).
+        self.allow_ai_cost = allow_ai_cost
         self._inventory: list[Profile] | None = None
         self.created: list[str] = []
+        self.paid: list[str] = []
+        self.resolved: dict[str, Profile] = {}
         self.usage_before: dict[str, object] | None = None
 
     def inventory(self) -> list[Profile]:
@@ -113,6 +118,22 @@ class Resolver:
         reason = f"No completed run on {self.state.environment} matches {json.dumps(fixture.match)}."
         if fixture.create_cost:
             reason += f" {fixture.create_cost}"
+        recorded = self.state.fixtures.get(fixture.id) or {}
+        if recorded.get("origin") == "created" and recorded.get("status") not in (None, "completed"):
+            reason += f" The run the suite created for it, {recorded.get('run_id')}, {recorded.get('status')}."
+        if fixture.derive is not None and self.create and fixture.id in self.allow_ai_cost:
+            parent_id = None
+            if fixture.derive.parent:
+                parent = self.resolved.get(fixture.derive.parent)
+                if parent is None:
+                    parent = self.resolve(self.catalog.get(fixture.derive.parent), taken).get("run")  # type: ignore[assignment]
+                parent_id = parent.run_id if parent else None
+            run_id = create_paid_fixture(self.backend, self.state, fixture, parent_id, log=self.log)
+            self.created.append(run_id)
+            self.paid.append(fixture.id)
+            run = self.backend.profile(run_id)
+            assert run is not None
+            return self._ready(fixture, run, "created")
         return self._uncovered(fixture, reason)
 
     def _ready(self, fixture: Fixture, run: Profile, origin: str) -> dict[str, object]:
@@ -135,6 +156,7 @@ class Resolver:
             item = self.resolve(fixture, taken)
             if item["status"] == "ready":
                 taken.add(item["run"].run_id)  # type: ignore[union-attr]
+                self.resolved[fixture.id] = item["run"]  # type: ignore[assignment]
             resolved.append(item)
         return resolved
 
@@ -206,7 +228,11 @@ def fixture_record(item: dict[str, object]) -> dict[str, object]:
 def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
     from .browser import Terminal  # Playwright is only needed for browser runs.
 
-    attempt = args.attempt or f"export-e2e-{stack.environment}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+    ui_url = target.override_origin(args.ui_url, stack.environment) if args.ui_url else stack.ui_url
+    overridden = ui_url != stack.ui_url.rstrip("/")
+    # An overridden Terminal is named in the attempt, so its results aren't read as the environment's.
+    where = f"{stack.environment}-ui-{re.sub(r'[^a-z0-9]+', '-', ui_url.split('://')[1].lower()).strip('-')}" if overridden else stack.environment
+    attempt = args.attempt or f"export-e2e-{where}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
     folder = args.artifacts / attempt
     if folder.exists():
         raise SystemExit(f"{folder} exists; attempts are never overwritten. Choose a new --attempt.")
@@ -216,7 +242,8 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
     summary: dict[str, object] = {
         "attempt": attempt,
         "environment": stack.environment,
-        "ui_url": stack.ui_url,
+        "ui_url": ui_url,
+        "ui_url_override_of": stack.ui_url if overridden else None,
         "backend_url": stack.backend_url,
         "started_at": now(),
         "suite_commit": git_commit(),
@@ -233,6 +260,7 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
             create=not args.no_create,
             refresh=args.refresh,
             log=print,
+            allow_ai_cost=frozenset(args.allow_ai_cost or ()),
         )
         resolved = resolver.resolve_all(catalog.select(args.only))
     folder.mkdir(parents=True)
@@ -244,13 +272,13 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
                 "kind": "export-e2e",
                 "created_at": summary["started_at"],
                 "environment": stack.environment,
-                "services": stack.identity(),
+                "services": target.identity(stack, ui_url),
                 "fixtures": [fixture_record(item) for item in resolved],
             },
             indent=2,
         )
     )
-    terminal = Terminal(stack, headed=args.headed, ready_timeout=args.ready_timeout)
+    terminal = Terminal(stack, headed=args.headed, ready_timeout=args.ready_timeout, ui_url=ui_url)
     summary["chrome"] = terminal.version()
     records, observed = [], {}
     formats = [{"id": f.id, "menu_label": f.menu_label} for f in catalog.formats]
@@ -313,7 +341,20 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
         " The export checks only read: no assistant run is started (see no-assistant-runs). "
         "The owner's usage meters were read before and after; other activity on the account can also move them."
     )
-    summary["cost"] = {"statement": statement, "usage_before": usage_before, "usage_after": backend.usage()}
+    paid = {
+        r["id"]: {
+            k: state.fixtures[r["id"]].get(k)
+            for k in ("run_id", "kind", "status", "run_requested_at", "usage_delta")
+        }
+        for r in records
+        if state.fixtures.get(r["id"], {}).get("paid")
+    }
+    summary["cost"] = {
+        "statement": statement,
+        "usage_before": usage_before,
+        "usage_after": backend.usage(),
+        "paid_runs": paid,
+    }
     summary["finished_at"] = now()
     (folder / "summary.json").write_text(json.dumps(summary, indent=1))
     (folder / "report.md").write_text(report.render(summary))
@@ -337,16 +378,23 @@ def prepare(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
             create=not args.no_create,
             refresh=args.refresh,
             log=print,
+            allow_ai_cost=frozenset(args.allow_ai_cost or ()),
         )
         resolved = resolver.resolve_all(catalog.select(args.only))
     print()
     for item in resolved:
         record = fixture_record(item)
         print(f"  {record['id']:<28} {record.get('origin') or record.get('outcome'):<10} {record.get('run_id') or record.get('reason')}")
+    for name in resolver.paid:
+        entry = state.fixtures[name]
+        moved = {k: v for k, v in (entry.get("usage_delta") or {}).items() if v}
+        print(f"\n{name}: run {entry['run_id']}; usage moved by {moved or 'nothing'}")
     if resolver.created:
         after = backend.usage()
         print("\nUsage meters before/after creating runs:")
         for label, usage in (("before", resolver.usage_before), ("after", after)):
+            if usage is None:
+                continue
             meters = ", ".join(f"{m['meter']} {m['used']}" for m in usage["meters"])  # type: ignore[index]
             print(f"  {label}: {meters}")
     backend.close()
@@ -418,10 +466,22 @@ def main() -> None:
         command.add_argument("--only", action="append", help="A fixture id; repeatable")
         command.add_argument("--no-create", action="store_true", help="Reuse runs only; create nothing")
         command.add_argument("--refresh", action="store_true", help="Re-read every run when discovering")
+        command.add_argument(
+            "--allow-ai-cost",
+            action="append",
+            metavar="FIXTURE",
+            help="Create this Monte Carlo or tuning fixture if no run exists; its report text "
+            "spends the owner's study_ai allowance. Repeatable. Never re-creates a recorded run.",
+        )
         if name == "run":
             command.add_argument("--attempt", help="Attempt folder name (default: export-e2e-<env>-<time>)")
             command.add_argument("--owner", default="export-e2e")
             command.add_argument("--headed", action="store_true")
+            command.add_argument(
+                "--ui-url",
+                help="Drive this local Terminal origin (e.g. http://localhost:3002) instead of the "
+                "environment's, with the environment's Backend, sign-in and fixtures",
+            )
             command.add_argument("--ready-timeout", type=float, default=180, help="Seconds to wait for data-export-ready")
     check = sub.add_parser("recheck")
     check.add_argument("attempt")
@@ -429,6 +489,14 @@ def main() -> None:
     if getattr(args, "attempt", None) and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}", args.attempt):
         parser.error("Use a simple attempt name, not a path.")
     catalog = load_catalog(args.catalog)
+    if getattr(args, "ui_url", None):
+        try:
+            target.override_origin(args.ui_url, args.env)
+        except ValueError as error:
+            parser.error(str(error))
+    for name in getattr(args, "allow_ai_cost", None) or ():
+        if catalog.get(name).derive is None:
+            parser.error(f"--allow-ai-cost names {name!r}, which the suite never creates at AI cost.")
     if args.command == "fixtures":
         sys.exit(fixtures(args, catalog))
     if args.command == "recheck":

@@ -46,8 +46,8 @@ DOM_SCRIPT = "\n".join(
 )
 
 
-def storage_state(stack: Stack) -> dict[str, object]:
-    """localStorage for the Terminal's origin, as Amplify stores a signed-in session."""
+def storage_state(stack: Stack, ui_url: str | None = None) -> dict[str, object]:
+    """localStorage for the Terminal's origin (or a local override), as Amplify stores a signed-in session."""
     if not stack.user_pool_client_id:
         raise ValueError(f"The {stack.environment} profile names no user_pool_client_id.")
     tokens = local_auth.cached_tokens(
@@ -66,7 +66,8 @@ def storage_state(stack: Stack) -> dict[str, object]:
         f"{prefix}.{user}.idToken": tokens["id_token"],
         f"{prefix}.{user}.clockDrift": "0",
     }
-    origin = f"{urlsplit(stack.ui_url).scheme}://{urlsplit(stack.ui_url).netloc}"
+    target = urlsplit(ui_url or stack.ui_url)
+    origin = f"{target.scheme}://{target.netloc}"
     return {
         "cookies": [],
         "origins": [
@@ -136,8 +137,12 @@ class Recorder:
 
 
 class Terminal:
-    def __init__(self, stack: Stack, headed: bool = False, ready_timeout: float = 180):
+    def __init__(
+        self, stack: Stack, headed: bool = False, ready_timeout: float = 180, ui_url: str | None = None
+    ):
         self.stack = stack
+        # The Terminal to drive; Backend reads and the sign-in stay the stack's.
+        self.ui_url = (ui_url or stack.ui_url).rstrip("/")
         self.ready_timeout = ready_timeout
         self._playwright = sync_playwright().start()
         # The installed Google Chrome; the suite never downloads a browser.
@@ -152,7 +157,7 @@ class Terminal:
 
     def context(self) -> BrowserContext:
         return self.browser.new_context(
-            storage_state=storage_state(self.stack),  # type: ignore[arg-type]
+            storage_state=storage_state(self.stack, self.ui_url),  # type: ignore[arg-type]
             viewport={"width": 1440, "height": 900},
             timezone_id="UTC",
             locale="en-US",
@@ -191,12 +196,19 @@ class Terminal:
         return observation
 
     def _menu(self, page: Page, run_id: str, study_id: str, out: Path) -> dict[str, object]:
-        url = f"{self.stack.ui_url.rstrip('/')}/studies/{study_id}?run={run_id}"
+        url = f"{self.ui_url}/studies/{study_id}?run={run_id}"
         page.goto(url, wait_until="domcontentloaded", timeout=90_000)
         try:  # Let the dashboard draw, so the menu screenshot shows the study.
             page.wait_for_load_state("networkidle", timeout=20_000)
         except PlaywrightTimeout:
             pass
+        if urlsplit(page.url).path.startswith("/login"):
+            page.screenshot(path=str(out / "study.png"))
+            return {
+                "found": False,
+                "error": f"{self.ui_url} showed its sign-in page: it did not accept the seeded "
+                f"{self.stack.environment} login (is it built for user pool client {self.stack.user_pool_client_id}?).",
+            }
         # The working menu is a Radix trigger; the placeholder for an unfinished run isn't.
         trigger = page.locator('button[aria-haspopup="menu"]', has_text="Export")
         try:
@@ -227,7 +239,7 @@ class Terminal:
         return {"found": True, "url": url, **details, "print_href": pdf["href"] if pdf else None}
 
     def _print(self, page: Page, href: str, out: Path) -> dict[str, object]:
-        url = self.stack.ui_url.rstrip("/") + href if href.startswith("/") else href
+        url = self.ui_url + href if href.startswith("/") else href
         started = time.monotonic()
         page.goto(url, wait_until="domcontentloaded", timeout=90_000)
         result: dict[str, object] = {"url": url}

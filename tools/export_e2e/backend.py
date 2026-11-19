@@ -140,22 +140,18 @@ class Backend:
                 for meter in value.get("meters") or []
             ],
             "breakdown": value.get("breakdown"),
+            "measurement": value.get("measurement"),
         }
 
     # --- creation ------------------------------------------------------------------
 
-    def validate(self, source: str, start: str, end: str, assets: list[str]) -> dict[str, object]:
-        response = self._request(
-            "POST",
-            "/api/v1/script-validator/validate",
-            json={
-                "source": source,
-                "study_from": start,
-                "study_to": end,
-                "study_assets": assets,
-                "study_type": "research",
-            },
-        )
+    def validate(
+        self, source: str, start: str, end: str, assets: list[str], study_type: str | None = "research"
+    ) -> dict[str, object]:
+        body: dict[str, object] = {"source": source, "study_from": start, "study_to": end, "study_assets": assets}
+        if study_type:
+            body["study_type"] = study_type
+        response = self._request("POST", "/api/v1/script-validator/validate", json=body)
         response.raise_for_status()
         return response.json()
 
@@ -187,6 +183,31 @@ class Backend:
         accepted = str(response.json().get("id") or execution_id)
         if accepted != execution_id:
             raise RuntimeError("Backend accepted the run under a different id than requested.")
+
+    def start_monte_carlo(self, parent_id: str, execution_id: str, options: Mapping[str, object]) -> None:
+        """A Monte Carlo run derived from a completed backtest; a repeat of the id is a 409."""
+        response = self._request(
+            "POST",
+            f"/api/v1/studies/executions/{parent_id}/monte-carlo",
+            json={**options, "execution_id": execution_id},
+        )
+        if response.status_code == 409:
+            return
+        if response.status_code != 201:
+            raise RuntimeError(f"Backend refused the Monte Carlo run (HTTP {response.status_code}): {response.text[:500]}")
+        if str(response.json().get("id") or execution_id) != execution_id:
+            raise RuntimeError("Backend accepted the Monte Carlo run under a different id than requested.")
+
+    def parameter_search(self, definition_id: str, body: Mapping[str, object]) -> dict[str, object]:
+        """Starts (or with dry_run, only sizes) a parameter search; a repeat of the id is a 409."""
+        response = self._request(
+            "POST", f"/api/v1/studies/definitions/{definition_id}/parameter-search", json=dict(body)
+        )
+        if response.status_code == 409:
+            return {"id": body.get("execution_id"), "repeat": True}
+        if response.status_code not in (200, 201):
+            raise RuntimeError(f"Backend refused the parameter search (HTTP {response.status_code}): {response.text[:500]}")
+        return response.json()
 
     def wait(self, run_id: str, timeout: float = 900, interval: float = 5) -> dict[str, object]:
         deadline = time.monotonic() + timeout
@@ -292,5 +313,97 @@ def create_fixture(
     return run_id
 
 
-def describe_entry(entry: Mapping[str, object]) -> str:
-    return f"{entry.get('origin')} {entry.get('run_id')}"
+def usage_delta(before: Mapping[str, object], after: Mapping[str, object]) -> dict[str, float]:
+    """How much each meter and breakdown kind moved between two usage reads."""
+    def read(usage: Mapping[str, object]) -> dict[str, float]:
+        values = {f"meter:{m['meter']}": float(m.get("used") or 0) for m in usage.get("meters") or []}  # type: ignore[union-attr]
+        values |= {f"kind:{k['kind']}": float(k.get("used") or 0) for k in usage.get("breakdown") or []}  # type: ignore[union-attr]
+        return values
+
+    first, second = read(before), read(after)
+    return {key: round(second.get(key, 0.0) - first.get(key, 0.0), 6) for key in sorted(set(first) | set(second))}
+
+
+def create_paid_fixture(
+    backend: Backend,
+    state: State,
+    fixture: Fixture,
+    parent_run_id: str | None,
+    log: Callable[[str], None] = print,
+    settle: float = 60,
+) -> str:
+    """Creates (or resumes) a Monte Carlo or tuning run, recording the owner's meters around it.
+
+    Called only when the owner has approved this fixture's AI cost. Like `create_fixture`, the
+    client-chosen run id is recorded before the request, so it never makes a second run.
+    """
+    derive = fixture.derive
+    assert derive is not None
+    spec = derive.spec_hash()
+    entry = state.fixtures.get(fixture.id) or {}
+    if entry.get("origin") != "created" or entry.get("spec_sha256") != spec:
+        earlier = list(entry.pop("superseded", [])) + ([entry] if entry.get("run_id") else [])
+        entry = {"origin": "created", "paid": True, "kind": derive.kind, "spec_sha256": spec}
+        if earlier:  # Keep the record of an earlier attempt; never drop evidence.
+            entry["superseded"] = earlier
+    state.fixtures[fixture.id] = entry
+    if "usage_before" not in entry:
+        entry["usage_before"] = backend.usage()
+        state.save()
+    if derive.kind == "parameter_search":
+        script = derive.script
+        assert script is not None
+        if not entry.get("definition_id"):
+            assets = list(script.assets)
+            if derive.parent:  # The parent backtest's concrete as-run asset ids.
+                if not parent_run_id:
+                    raise RuntimeError(f"{fixture.id}: the {derive.parent} fixture has no run to take assets from.")
+                study = backend.snapshot(parent_run_id).get("study") or {}
+                assets = list((study.get("data") or {}).get("assets") or [])  # type: ignore[union-attr]
+                entry["assets_from_run"] = parent_run_id
+            result = backend.validate(script.source(), script.start, script.end, assets, study_type=None)
+            if result.get("status") != "ok":
+                raise RuntimeError(f"{fixture.id}: Backend rejected the script: {result.get('error_message')}")
+            log(f"{fixture.id}: creating the tuning parent definition")
+            entry["assets"] = assets
+            entry["definition_id"] = backend.create_definition(
+                script.name, script.description, script.source(), assets
+            )
+            state.save()
+        request = {"period": {"start": script.start, "end": script.end}, "search": dict(derive.search)}
+        if "dry_run" not in entry:
+            entry["dry_run"] = backend.parameter_search(str(entry["definition_id"]), {**request, "dry_run": True})
+            state.save()
+        limit = int((derive.search.get("budget") or {}).get("max_trials", 0))  # type: ignore[union-attr]
+        trials = int(entry["dry_run"].get("trial_count") or 0)  # type: ignore[union-attr]
+        if limit and trials > limit:
+            raise RuntimeError(f"{fixture.id}: the search would run {trials} trials, more than {limit}.")
+    else:
+        if not parent_run_id and not entry.get("parent_run_id"):
+            raise RuntimeError(f"{fixture.id}: the {derive.parent} fixture has no run to derive from.")
+        entry.setdefault("parent_run_id", parent_run_id)
+    if not entry.get("run_id"):
+        entry["run_id"] = str(uuid.uuid4())
+        entry["run_requested_at"] = now()
+        state.save()
+    run_id = str(entry["run_id"])
+    if backend.execution(run_id) is None:
+        log(f"{fixture.id}: starting {derive.kind} run {run_id}")
+        if derive.kind == "parameter_search":
+            backend.parameter_search(str(entry["definition_id"]), {**request, "execution_id": run_id})
+        else:
+            backend.start_monte_carlo(str(entry["parent_run_id"]), run_id, derive.options)
+    execution = backend.wait(run_id, timeout=1800)
+    entry["status"] = execution.get("status")
+    entry["execution_type"] = execution.get("execution_type")
+    entry["study_id"] = execution.get("definition_id")
+    entry["settled_at"] = now()
+    if "usage_after" not in entry:
+        entry["usage_after"] = backend.usage()
+        time.sleep(settle)  # Usage can be reported a little after the run settles.
+        entry["usage_settled"] = backend.usage()
+        entry["usage_delta"] = usage_delta(entry["usage_before"], entry["usage_settled"])  # type: ignore[arg-type]
+    state.save()
+    if execution.get("status") != "completed":
+        raise RuntimeError(f"{fixture.id}: the created run {run_id} {execution.get('status')}.")
+    return run_id

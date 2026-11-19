@@ -241,7 +241,7 @@ class FakeBackend:
         self.runs: dict[str, dict] = {}
         self.fail_start = fail_start
 
-    def validate(self, source, start, end, assets):  # noqa: ANN001, ANN201
+    def validate(self, source, start, end, assets, study_type="research"):  # noqa: ANN001, ANN201
         self.calls.append("validate")
         return {"status": "ok"}
 
@@ -258,7 +258,7 @@ class FakeBackend:
             raise ConnectionError("dropped")
         self.runs[execution_id] = {"id": execution_id, "status": "completed", "execution_type": "research", "definition_id": definition_id}
 
-    def wait(self, run_id):  # noqa: ANN001, ANN201
+    def wait(self, run_id, timeout=900):  # noqa: ANN001, ANN201
         return self.runs[run_id]
 
 
@@ -569,3 +569,153 @@ def test_words_broken_mid_word_in_table_cells_fail() -> None:
     detail = failing(obs)["table-words-intact"]
     assert "A4: 3 words broken mid-word in 1 tables" in detail and "'N|o|v'" in detail
     assert statuses(observation())["table-words-intact"] == "pass"
+
+
+# --- a local Terminal against the environment's Backend --------------------------------------------
+
+from tools.agent_testing import Stack  # noqa: E402
+from tools.export_e2e import browser, target  # noqa: E402
+
+DEV_STACK = Stack(
+    ai_url="https://agent.example.test",
+    backend_url="https://api.example.test",
+    ui_url="https://app.example.test",
+    environment="dev",
+    user_pool_id="us-west-1_Pool",
+    user_pool_client_id="client123",
+)
+
+
+@pytest.mark.parametrize(
+    ("given", "origin"),
+    [
+        ("http://localhost:3002", "http://localhost:3002"),
+        ("http://localhost:3002/", "http://localhost:3002"),
+        ("https://127.0.0.1:8443", "https://127.0.0.1:8443"),
+        ("http://[::1]:5173", "http://[::1]:5173"),
+        ("http://terminal.localhost:3000", "http://terminal.localhost:3000"),
+    ],
+)
+def test_a_local_terminal_origin_is_accepted(given: str, origin: str) -> None:
+    assert target.override_origin(given, "dev") == origin
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["https://app.dev.epoch.trade.evil.test", "http://192.168.1.4:3000", "http://localhost:3002/studies", "http://user:pw@localhost:3002", "ftp://localhost", "http://localhost:3002?x=1"],
+)
+def test_other_origins_never_receive_the_sign_in(given: str) -> None:
+    with pytest.raises(ValueError):
+        target.override_origin(given, "dev")
+
+
+def test_an_overridden_terminal_is_recorded_in_the_attempt_identity() -> None:
+    assert target.identity(DEV_STACK) == DEV_STACK.identity()
+    services = target.identity(DEV_STACK, "http://localhost:3002")
+    assert services["ui_url"] == "http://localhost:3002"
+    assert services["backend_url"] == "https://api.example.test"
+    assert services["ui_url_override"] == {"replaces": "https://app.example.test", "backend_and_sign_in_from": "dev"}
+
+
+def test_sign_in_is_seeded_on_the_overridden_origin_without_the_refresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import jwt
+
+    key = "an-unused-test-signing-key-of-32-bytes!"
+    access = jwt.encode({"username": "user-1", "client_id": "client123", "exp": 9999999999}, key, algorithm="HS256")
+    tokens = {"access_token": access, "id_token": "id.token.value", "refresh_token": "refresh-secret"}
+    seen = {}
+
+    def cached(path, login_command, min_validity):  # noqa: ANN001, ANN202
+        seen["min_validity"] = min_validity
+        return tokens
+
+    monkeypatch.setattr(browser.local_auth, "cached_tokens", cached)
+    state = browser.storage_state(DEV_STACK, "http://localhost:3002")
+    (origin,) = state["origins"]  # type: ignore[misc]
+    assert origin["origin"] == "http://localhost:3002"
+    items = {i["name"]: i["value"] for i in origin["localStorage"]}
+    prefix = "CognitoIdentityServiceProvider.client123"
+    assert items[f"{prefix}.LastAuthUser"] == "user-1"
+    assert items[f"{prefix}.user-1.idToken"] == "id.token.value"
+    assert items[f"{prefix}.user-1.accessToken"] == access
+    assert "refresh-secret" not in json.dumps(state)
+    assert seen["min_validity"] >= 30 * 60
+    assert browser.storage_state(DEV_STACK)["origins"][0]["origin"] == "https://app.example.test"  # type: ignore[index]
+    text = report.render(
+        {"attempt": "a", "environment": "dev", "ui_url": "http://localhost:3002", "ui_url_override_of": "https://app.example.test", "backend_url": "https://api", "started_at": "t", "fixtures": []}
+    )
+    assert "Terminal override:** http://localhost:3002 replaces https://app.example.test" in text
+
+
+# --- Monte Carlo and tuning: created only with approval, once ------------------------------------------
+
+
+def test_derived_fixtures_need_their_parent_and_are_never_plain_scripts() -> None:
+    catalog = load_catalog()
+    monte_carlo, tuning = catalog.get("monte-carlo"), catalog.get("tuning")
+    assert monte_carlo.derive.kind == "monte_carlo" and monte_carlo.derive.parent == "backtest"  # type: ignore[union-attr]
+    assert tuning.derive.kind == "parameter_search" and tuning.derive.parent == "backtest"  # type: ignore[union-attr]
+    assert tuning.derive.search["budget"]["max_trials"] == 2  # type: ignore[index, union-attr]
+    assert "tune_space(" in tuning.derive.script.source()  # type: ignore[union-attr]
+
+
+def test_usage_delta_reports_meter_and_kind_movement() -> None:
+    before = {"meters": [{"meter": "study_ai", "used": 55.0}], "breakdown": [{"kind": "monte_carlo", "used": 0}]}
+    after = {"meters": [{"meter": "study_ai", "used": 57.5}], "breakdown": [{"kind": "monte_carlo", "used": 2.5}]}
+    assert backend_module.usage_delta(before, after) == {"kind:monte_carlo": 2.5, "meter:study_ai": 2.5}
+
+
+class PaidBackend(FakeBackend):
+    def __init__(self, status: str = "completed"):
+        super().__init__()
+        self.status = status
+        self.usage_reads = 0
+
+    def usage(self):  # noqa: ANN201
+        self.usage_reads += 1
+        return {"read_at": str(self.usage_reads), "meters": [{"meter": "study_ai", "used": 55.0 + self.usage_reads}], "breakdown": []}
+
+    def snapshot(self, run_id):  # noqa: ANN001, ANN201
+        return {"study": {"data": {"assets": ["SEC_abc-Stocks"]}}}
+
+    def start_monte_carlo(self, parent_id, execution_id, options):  # noqa: ANN001, ANN201
+        self.calls.append(f"monte carlo {parent_id} {execution_id}")
+        self.runs[execution_id] = {"id": execution_id, "status": self.status, "execution_type": "montecarlo", "definition_id": STUDY}
+
+    def parameter_search(self, definition_id, body):  # noqa: ANN001, ANN201
+        if body.get("dry_run"):
+            self.calls.append("dry run")
+            return {"trial_count": 2, "est_duration_secs": 90}
+        self.calls.append(f"search {body['execution_id']}")
+        self.runs[body["execution_id"]] = {"id": body["execution_id"], "status": self.status, "execution_type": "parameter_search", "definition_id": definition_id}
+        return {"id": body["execution_id"], "trial_count": 2}
+
+    def create_definition(self, name, description, source, assets):  # noqa: ANN001, ANN201
+        self.calls.append(f"definition {assets}")
+        return STUDY
+
+
+def test_a_paid_run_is_made_once_with_meters_read_around_it(tmp_path: Path) -> None:
+    catalog = load_catalog()
+    state = backend_module.State(tmp_path / "state.json", "dev", "owner")
+    paid = PaidBackend()
+    run_id = backend_module.create_paid_fixture(paid, state, catalog.get("monte-carlo"), RUN, log=lambda _: None, settle=0)  # type: ignore[arg-type]
+    assert paid.calls == [f"monte carlo {RUN} {run_id}"]
+    entry = state.fixtures["monte-carlo"]
+    assert entry["paid"] and entry["parent_run_id"] == RUN
+    assert entry["usage_delta"]["meter:study_ai"] == 2.0  # Read before the request and a minute after it settled.
+    assert backend_module.create_paid_fixture(paid, state, catalog.get("monte-carlo"), RUN, log=lambda _: None, settle=0) == run_id  # type: ignore[arg-type]
+    assert paid.calls == [f"monte carlo {RUN} {run_id}"]
+    search = backend_module.create_paid_fixture(paid, state, catalog.get("tuning"), RUN, log=lambda _: None, settle=0)  # type: ignore[arg-type]
+    assert paid.calls[1:] == ["validate", "definition ['SEC_abc-Stocks']", "dry run", f"search {search}"]
+
+
+def test_a_failed_paid_run_is_reported_not_retried(tmp_path: Path) -> None:
+    catalog = load_catalog()
+    state = backend_module.State(tmp_path / "state.json", "dev", "owner")
+    failing_backend = PaidBackend(status="failed")
+    with pytest.raises(RuntimeError, match="failed"):
+        backend_module.create_paid_fixture(failing_backend, state, catalog.get("monte-carlo"), RUN, log=lambda _: None, settle=0)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="failed"):
+        backend_module.create_paid_fixture(failing_backend, state, catalog.get("monte-carlo"), RUN, log=lambda _: None, settle=0)  # type: ignore[arg-type]
+    assert len([c for c in failing_backend.calls if c.startswith("monte carlo")]) == 1
