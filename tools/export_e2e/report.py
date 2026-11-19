@@ -81,6 +81,16 @@ def render(summary: Mapping[str, object]) -> str:
     if formats:
         lines += ["", "## Formats", ""]
         lines += [f"- {name}: {state}" for name, state in formats.items()]
+    # Server-made PDFs: every result with its detail, so a skip says why (e.g. not deployed yet).
+    server = [
+        (f["id"], r) for f in fixtures for r in f.get("results", []) if str(r["check"]).startswith("pdf-server")  # type: ignore[union-attr]
+    ]
+    if server:
+        lines += ["", "## Server PDF", "", "| Fixture | Check | Result | Detail |", "|---|---|---|---|"]
+        lines += [
+            f"| {fixture} | {r['check']} | {SYMBOL.get(r['status'], r['status'])} | {_cell(r['detail'])} |"
+            for fixture, r in server
+        ]
     uncovered = [f for f in fixtures if f["outcome"] == "uncovered"]
     if uncovered:
         lines += ["", "## Not covered", ""]

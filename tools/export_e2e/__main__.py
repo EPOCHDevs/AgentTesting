@@ -38,6 +38,16 @@ def suite_dir(artifacts: Path) -> Path:
     return artifacts / "export-e2e"
 
 
+def guarded(work: Callable[..., dict[str, object]], *args: object) -> dict[str, object]:
+    """A server PDF observation, or the error that stopped it, without any URL it named."""
+    from .server_pdf import withhold_urls
+
+    try:
+        return work(*args)
+    except Exception as error:  # noqa: BLE001 — record it; the fixture's other checks stand.
+        return {"error": withhold_urls(f"{type(error).__name__}: {str(error)[:300]}")}
+
+
 class Resolver:
     """Pins a run to each fixture: the recorded one, a matching existing run, or a created one."""
 
@@ -226,6 +236,7 @@ def fixture_record(item: dict[str, object]) -> dict[str, object]:
 
 
 def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
+    from . import server_pdf
     from .browser import Terminal  # Playwright is only needed for browser runs.
 
     ui_url = target.override_origin(args.ui_url, stack.environment) if args.ui_url else stack.ui_url
@@ -280,6 +291,9 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
     )
     terminal = Terminal(stack, headed=args.headed, ready_timeout=args.ready_timeout, ui_url=ui_url)
     summary["chrome"] = terminal.version()
+    exports = server_pdf.Exports(backend._request)  # The owner's bearer, as for every Backend read.
+    posts: list[dict[str, object]] = []  # Each export the suite asked Platform for, for the cost record.
+    probed = False  # The attempt-wide server PDF probes run once, on the first dashboard checked.
     records, observed = [], {}
     formats = [{"id": f.id, "menu_label": f.menu_label} for f in catalog.formats]
     offered: dict[str, set[bool]] = {f.id: set() for f in catalog.formats}
@@ -303,6 +317,22 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
                 (out / "error.txt").write_text(traceback.format_exc())
                 continue
             obs["fixture"] = fixture.id
+            empty = run.status == "completed" and not run.categories
+            print(f"{fixture.id}: asking Platform for its server PDF…", flush=True)
+            obs["server_pdf"] = guarded(server_pdf.export_run, exports, run.run_id, out)
+            posts.append({"fixture": fixture.id, "via": "api", "status": obs["server_pdf"].get("post", {}).get("status")})  # type: ignore[union-attr]
+            if not empty and not probed and (obs.get("menu") or {}).get("found"):  # type: ignore[union-attr]
+                probed = True
+                cancel = guarded(server_pdf.cancel_probe, exports, run.run_id)
+                obs["server_pdf_cancel"] = cancel
+                posts.append({"fixture": fixture.id, "via": "api (cancel)", "status": cancel.get("post", {}).get("status")})  # type: ignore[union-attr]
+                obs["server_pdf_other_owner"] = server_pdf.other_owner_probe(None, obs["server_pdf"].get("export_id"))  # type: ignore[arg-type]
+                print(f"{fixture.id}: Export → PDF in the Terminal…", flush=True)
+                ui = guarded(terminal.export_pdf, run.run_id, run.study_id, out)
+                obs["ai_runs"].extend(ui.pop("ai_runs", []))  # type: ignore[union-attr]
+                obs["server_pdf_ui"] = ui
+                if ui.get("build") == "server":
+                    posts.append({"fixture": fixture.id, "via": "Terminal", "status": ui.get("post_status")})
             (out / "observation.json").write_text(json.dumps(obs, indent=1))
             results = checks.evaluate(obs, fixture, catalog.formats, run)
             record["results"] = [r.to_json() for r in results]
@@ -341,6 +371,8 @@ def run_suite(args: argparse.Namespace, stack: Stack, catalog: Catalog) -> int:
         " The export checks only read: no assistant run is started (see no-assistant-runs). "
         "The owner's usage meters were read before and after; other activity on the account can also move them."
     )
+    statement += server_pdf.cost_statement(posts)
+    summary["server_pdf_requests"] = posts
     paid = {
         r["id"]: {
             k: state.fixtures[r["id"]].get(k)

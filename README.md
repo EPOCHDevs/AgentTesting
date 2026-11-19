@@ -294,6 +294,22 @@ Letter widths. It then makes A4 and Letter PDFs. Each format is a check in
 `catalog.json`. A format is skipped while the Export menu doesn't offer it, and
 fails when the menu offers it but the suite has no check for it yet.
 
+It also asks Platform for each fixture's PDF made on the server
+(`POST /api/v1/platform/exports`, A4), as the signed-in owner, through the API.
+It reads the export every 2 s for up to 2 minutes, downloads a ready file
+without the bearer, and keeps it as `server-export-a4.pdf` (`pdf-server`). It
+then compares the file's section headings and table titles, in order, with the
+browser-print PDF (`pdf-server-text`). A run without a dashboard must be
+refused (422) or fail cleanly as `no_dashboard`. Once per attempt, on the first
+dashboard checked, it cancels a queued export (`pdf-server-cancel`) and clicks
+Export → PDF in the Terminal (`pdf-server-ui`). That check expects "Preparing
+your PDF…" and then a download, or the print layout in a new tab when the server
+refuses. A 404 (route not deployed), a 503 (unavailable) or the hourly limit
+(429) is a skip, not a failure. The suite has one identity, so another owner's
+read is skipped (`pdf-server-other-owner`). Signed download addresses are never
+recorded. Platform allows 20 exports an hour per owner, and a full run asks for
+about 15.
+
 The suite reuses the owner's existing runs where it can. A shape that no
 existing run has comes from a script in `campaigns/export-e2e/scripts`. Those
 scripts are research-only, source-free and without `llm_call`, so Backend makes

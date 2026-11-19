@@ -7,6 +7,7 @@ import json
 import struct
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tools.export_e2e import backend as backend_module
@@ -902,3 +903,316 @@ def test_the_monte_carlo_fixture_carries_its_expectations() -> None:
     assert expect["sections_with_tables"] == ["Method and statistical checks"]
     profile_json = json.loads(json.dumps(failed_text_run().to_json()))
     assert Profile.from_json(profile_json).ai_text_errors == [REASON]
+
+
+# --- server-made PDFs (Platform's export routes) ---------------------------------------------------
+
+from tools.export_e2e import server_pdf  # noqa: E402
+
+EXPORT_ID = "0190a1b2-c3d4-7e5f-8a6b-1c2d3e4f5a6b"
+SIGNED = "https://exports.example.test/exports/owner/x/export.pdf?X-Amz-Signature=secret"
+PDF_BYTES = b"%PDF-1.7 /Type /Pages /Count 2 /Type /Page /Type /Page %%EOF"
+FILE_NAME = "Election returns – 16 Nov 2026.pdf"
+
+
+def exported(state: str, **fields: object) -> dict:
+    return {"export_id": EXPORT_ID, "execution_id": RUN, "format": "pdf", "paper": "a4", "state": state, **fields}
+
+
+READY = exported("ready", file_name=FILE_NAME, download_url=SIGNED, download_expires_at="2026-11-19T09:05:00Z")
+
+
+class Clock:
+    """Monotonic time that only moves when the poll sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class FakeExports:
+    """Platform's routes with scripted answers; records every call in order."""
+
+    def __init__(self, post: server_pdf.Answer, reads: list[server_pdf.Answer] | None = None, delete: int = 204):
+        self.post, self.reads, self.delete_status = post, list(reads or []), delete
+        self.calls: list[str] = []
+
+    def create(self, run_id: str, paper: str = "a4") -> server_pdf.Answer:
+        self.calls.append(f"POST {paper}")
+        return self.post
+
+    def get(self, export_id: str) -> server_pdf.Answer:
+        self.calls.append("GET")
+        return self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
+
+    def cancel(self, export_id: str) -> server_pdf.Answer:
+        self.calls.append("DELETE")
+        return server_pdf.Answer(self.delete_status)
+
+
+def ok(body: dict) -> server_pdf.Answer:
+    return server_pdf.Answer(200, body)
+
+
+ACCEPTED = server_pdf.Answer(202, exported("queued"))
+NOT_DEPLOYED = server_pdf.Answer(404, message="Not found")
+
+
+def test_the_poll_reads_every_two_seconds_and_records_each_state_with_its_time() -> None:
+    clock = Clock()
+    reads = [ok(exported("queued")), server_pdf.Answer(500, message="The export's result could not be read"), ok(READY)]
+    final, record = server_pdf.poll(FakeExports(ACCEPTED, reads).get, exported("queued"), began=clock(), clock=clock, sleep=clock.sleep)
+    assert final["state"] == "ready" and clock.sleeps == [2.0, 2.0, 2.0]
+    assert record["transitions"] == [{"state": "queued", "at_s": 0.0}, {"state": "ready", "at_s": 6.0}]
+    assert record["polls"] == 3 and record["outcome"] == "final"
+    assert record["errors"] == [{"status": 500, "message": "The export's result could not be read", "at_s": 4.0}]
+
+
+def test_the_poll_stops_at_two_minutes_or_when_the_export_is_gone() -> None:
+    clock = Clock()
+    final, record = server_pdf.poll(FakeExports(ACCEPTED, [ok(exported("queued"))]).get, exported("queued"), began=clock(), clock=clock, sleep=clock.sleep)
+    assert record["outcome"] == "timeout" and record["polls"] == 60 and record["elapsed_s"] == 120.0
+    assert final["state"] == "queued"
+    clock = Clock()
+    _, gone = server_pdf.poll(FakeExports(ACCEPTED, [server_pdf.Answer(404, message="Export not found")]).get, exported("queued"), began=clock(), clock=clock, sleep=clock.sleep)
+    assert gone["outcome"] == "gone" and gone["polls"] == 1
+
+
+def fetched(data: bytes = PDF_BYTES, **info: object):  # noqa: ANN201
+    def fetch(url: str) -> tuple[dict, bytes]:
+        assert url == SIGNED
+        return {"status": 200, "content_type": "application/pdf", "content_disposition": 'attachment; filename="x.pdf"', "bytes": len(data), **info}, data
+
+    return fetch
+
+
+def made(tmp_path: Path, exports: FakeExports, fetch=None, text: str | None = "text") -> dict:  # noqa: ANN001
+    clock = Clock()
+    return server_pdf.export_run(
+        exports, RUN, tmp_path, clock=clock, sleep=clock.sleep, fetch=fetch or fetched(), text=lambda _path: text
+    )
+
+
+def server_obs(server: dict, **more: object) -> dict:
+    obs = observation()
+    obs["server_pdf"] = server
+    obs.update(more)
+    return obs
+
+
+def server_results(obs: dict, run: Profile | None = PROFILE) -> dict[str, checks.Result]:
+    return {r.check: r for r in checks.evaluate(obs, FIXTURE, FORMATS, run) if r.check.startswith("pdf-server")}
+
+
+def test_a_ready_server_pdf_is_downloaded_checked_and_kept_without_its_signed_address(tmp_path: Path) -> None:
+    exports = FakeExports(ACCEPTED, [ok(exported("queued")), ok(READY)])
+    server = made(tmp_path, exports)
+    assert exports.calls == ["POST a4", "GET", "GET"]
+    assert (tmp_path / "server-export-a4.pdf").read_bytes() == PDF_BYTES
+    assert server["download"]["pages"] == 2 and server["download"]["pdf_header"] is True
+    assert server["export"]["download_url"] == server_pdf.REDACTED
+    assert "X-Amz-Signature" not in json.dumps(server) and "secret" not in json.dumps(server)
+    result = server_results(server_obs(server))["pdf-server"]
+    assert result.status == "pass", result.detail
+    assert result.detail.startswith("queued 0.0s → ready 4.0s (2 polls); 2 pages") and repr(FILE_NAME) in result.detail
+
+
+@pytest.mark.parametrize(
+    ("post", "detail"),
+    [
+        (NOT_DEPLOYED, "server export not deployed (POST 404 'Not found')"),
+        (server_pdf.Answer(404), "server export not deployed (POST 404)"),  # A load balancer's page.
+        (server_pdf.Answer(503, message="Exports are not available"), "unavailable (POST 503 'Exports are not available')"),
+        (server_pdf.Answer(429, message="You've made 20 exports this hour. Try again later.", retry_after="60"), "hourly export limit reached"),
+    ],
+)
+def test_a_service_that_isnt_live_is_a_skip_not_a_failure(tmp_path: Path, post: server_pdf.Answer, detail: str) -> None:
+    exports = FakeExports(post)
+    obs = server_obs(made(tmp_path, exports))
+    obs["server_pdf_cancel"] = server_pdf.cancel_probe(exports, RUN)
+    results = server_results(obs)
+    assert results["pdf-server"].status == "skip" and results["pdf-server"].detail.startswith(detail)
+    assert results["pdf-server-cancel"].status == "skip" and results["pdf-server-cancel"].detail.startswith(detail)
+    assert results["pdf-server-text"].status == "skip"
+    assert exports.calls == ["POST a4", "POST a4"]  # Nothing more is asked of a refused export.
+    assert checks.outcome(checks.evaluate(obs, FIXTURE, FORMATS, PROFILE)) == "pass"
+
+
+def test_platform_not_finding_the_owners_run_or_an_unexpected_answer_fails(tmp_path: Path) -> None:
+    assert server_results(server_obs(made(tmp_path, FakeExports(server_pdf.Answer(404, message="Run not found")))))["pdf-server"].status == "fail"
+    assert server_results(server_obs(made(tmp_path, FakeExports(server_pdf.Answer(409, message="The run hasn't completed")))))["pdf-server"].status == "fail"
+    refused = server_results(server_obs(made(tmp_path, FakeExports(server_pdf.Answer(422, message="This run can't be exported on the server")))))
+    assert refused["pdf-server"].status == "skip" and "prints it in the browser" in refused["pdf-server"].detail
+
+
+def test_a_slow_failed_or_wrong_server_pdf_fails(tmp_path: Path) -> None:
+    exports = FakeExports(ACCEPTED, [ok(exported("queued"))])
+    slow = made(tmp_path, exports)
+    assert exports.calls[-1] == "DELETE" and slow["cancelled_after_timeout"] == {"status": 204}
+    assert "Not final within 120s" in server_results(server_obs(slow))["pdf-server"].detail
+    failure = {"reason": "render_failed", "message": "The export couldn’t be made. Try again."}
+    failed = made(tmp_path, FakeExports(ACCEPTED, [ok(exported("failed", failure=failure))]))
+    assert "Ended failed 'render_failed'" in server_results(server_obs(failed))["pdf-server"].detail
+    named = made(tmp_path, FakeExports(ACCEPTED, [ok({**READY, "file_name": "Election returns.pdf"})]))
+    assert f"expected {FILE_NAME!r}" in server_results(server_obs(named))["pdf-server"].detail
+    html = made(tmp_path, FakeExports(ACCEPTED, [ok(READY)]), fetch=fetched(b"<html>"))
+    assert "not a PDF" in server_results(server_obs(html))["pdf-server"].detail
+    huge = made(tmp_path, FakeExports(ACCEPTED, [ok(READY)]), fetch=fetched(over_limit=True))
+    assert "50 MB or more" in server_results(server_obs(huge))["pdf-server"].detail
+    inline = made(tmp_path, FakeExports(ACCEPTED, [ok(READY)]), fetch=fetched(content_disposition="inline"))
+    assert "expected an attachment" in server_results(server_obs(inline))["pdf-server"].detail
+
+
+def test_a_run_without_a_dashboard_is_refused_or_fails_cleanly(tmp_path: Path) -> None:
+    empty = run_profile(RUN, categories=[])
+
+    def judged(exports: FakeExports) -> checks.Result:
+        obs = {"run_id": RUN, "study_id": STUDY, "menu": {"found": False, "kind": "placeholder"}, "print": {"ready": "error"}, "server_pdf": made(tmp_path, exports)}
+        found = {r.check: r for r in checks.evaluate(obs, NO_DASHBOARD, FORMATS, empty)}
+        assert "pdf-server-text" not in found
+        return found["pdf-server"]
+
+    assert judged(FakeExports(server_pdf.Answer(422, message="This run can't be exported on the server"))).status == "pass"
+    no_dashboard = exported("failed", failure={"reason": "no_dashboard", "message": "x"})
+    assert judged(FakeExports(ACCEPTED, [ok(no_dashboard)])).status == "pass"
+    printed = judged(FakeExports(ACCEPTED, [ok(READY)]))
+    assert printed.status == "fail" and "ended ready" in printed.detail
+    assert judged(FakeExports(NOT_DEPLOYED)).status == "skip"
+
+
+BROWSER_TEXT = "Exported from Epoch on 18 Nov 2026\nElection returns\nOVERVIEW\nKEY CHARTS\nClose\n\x0cROWS\nAll rows\nA B\n0 0,000\n"
+
+
+def test_the_server_pdf_has_the_browser_pdfs_headings_and_table_titles_in_order(tmp_path: Path) -> None:
+    obs = server_obs(made(tmp_path, FakeExports(ACCEPTED, [ok(READY)]), text="Election returns OVERVIEW\x0c KEY\nCHARTS Close ROWS\x0cAll\nrows"))
+    obs["pdf_text"] = BROWSER_TEXT
+    assert checks.outline(obs["export"]) == ["Overview", "Key charts", "Rows", "All rows"]
+    result = server_results(obs)["pdf-server-text"]
+    assert result.status == "pass" and result.detail.startswith("4 section headings and table titles")
+    obs["server_pdf"]["text"] = "Election returns ROWS All rows OVERVIEW KEY CHARTS"
+    result = server_results(obs)["pdf-server-text"]
+    assert result.status == "fail" and "first difference at #3: browser 'Rows', server None" in result.detail
+    assert "not in order in the server PDF: ['Rows', 'All rows']" in result.detail
+    obs["server_pdf"]["text"] = "OVERVIEW KEY CHARTS ROWS"
+    assert "not in order in the server PDF: ['All rows']" in server_results(obs)["pdf-server-text"].detail
+    obs["pdf_text"] = None
+    assert "pdftotext" in server_results(obs)["pdf-server-text"].detail
+
+
+def test_a_queued_export_is_cancelled_with_no_read_before_the_delete() -> None:
+    exports = FakeExports(ACCEPTED, [ok(exported("cancelled"))])
+    probe = server_pdf.cancel_probe(exports, RUN)
+    assert exports.calls == ["POST a4", "DELETE", "GET"]
+    obs = observation() | {"server_pdf_cancel": probe}
+    assert server_results(obs)["pdf-server-cancel"].status == "pass"
+    stuck = server_pdf.cancel_probe(FakeExports(ACCEPTED, [ok(READY)]), RUN)
+    assert "expected 'cancelled'" in server_results(observation() | {"server_pdf_cancel": stuck})["pdf-server-cancel"].detail
+    refused = server_pdf.cancel_probe(FakeExports(ACCEPTED, [ok(exported("cancelled"))], delete=500), RUN)
+    assert "DELETE answered 500" in server_results(observation() | {"server_pdf_cancel": refused})["pdf-server-cancel"].detail
+
+
+def test_another_owners_read_is_skipped_without_a_second_identity() -> None:
+    alone = server_results(observation() | {"server_pdf_other_owner": server_pdf.other_owner_probe(None, EXPORT_ID)})
+    assert alone["pdf-server-other-owner"].status == "skip" and "one owner" in alone["pdf-server-other-owner"].detail
+    for status, outcome in ((404, "pass"), (200, "fail")):
+        other = FakeExports(ACCEPTED, [server_pdf.Answer(status)])
+        probe = server_pdf.other_owner_probe(other, EXPORT_ID)  # type: ignore[arg-type]
+        assert server_results(observation() | {"server_pdf_other_owner": probe})["pdf-server-other-owner"].status == outcome
+
+
+PREPARING = [{"text": checks.PREPARING_TOAST, "at_ms": 40}]
+PRINT_TAB = {"path": f"/print/studies/{STUDY}", "run": RUN}
+
+
+@pytest.mark.parametrize(
+    ("ui", "status", "detail"),
+    [
+        ({"build": "print-link", "popup": PRINT_TAB, "toasts": []}, "skip", "server export not deployed: this Terminal build has no server PDF"),
+        ({"build": "print-link", "popup": {"path": "/studies/x", "run": None}, "toasts": []}, "fail", "not the run's print layout"),
+        ({"build": "server", "post_status": 404, "post_message": "Not found", "popup": PRINT_TAB, "toasts": PREPARING}, "skip", "server export not deployed (POST 404 'Not found'): “Preparing your PDF…”, then the print layout opened"),
+        ({"build": "server", "post_status": 503, "popup": PRINT_TAB, "toasts": PREPARING}, "skip", "unavailable (POST 503)"),
+        ({"build": "server", "post_status": 422, "popup": PRINT_TAB, "toasts": PREPARING}, "skip", "the run can't be exported on the server"),
+        ({"build": "server", "post_status": 404, "toasts": PREPARING}, "fail", "the print layout didn't open"),
+        ({"build": "server", "post_status": 404, "popup": PRINT_TAB, "toasts": []}, "fail", "no “Preparing your PDF…” toast"),
+        ({"build": "server", "post_status": 202, "toasts": PREPARING, "waited_s": 130, "download": {"suggested_filename": FILE_NAME, "bytes": 900, "pdf_header": True, "at_s": 9.1}}, "pass", f"then {FILE_NAME!r} downloaded"),
+        ({"build": "server", "post_status": 202, "toasts": PREPARING, "waited_s": 130}, "fail", "no download within 130s"),
+        ({"build": "server", "post_status": 202, "toasts": PREPARING, "download": {"suggested_filename": "x.pdf", "pdf_header": False}}, "fail", "is not a PDF"),
+        ({"build": "server", "post_status": 202, "toasts": PREPARING, "download": {"suggested_filename": "x.pdf", "failure": "canceled"}}, "fail", "failed: canceled"),
+        ({"error": "The study page showed no Export menu within 120s"}, "fail", "no Export menu"),
+    ],
+)
+def test_export_pdf_in_the_terminal_downloads_or_falls_back_to_the_print_tab(ui: dict, status: str, detail: str) -> None:
+    obs = observation() | {"server_pdf_ui": {"run_id": RUN, "study_id": STUDY, **ui}}
+    result = server_results(obs)["pdf-server-ui"]
+    assert result.status == status and detail in result.detail, result.detail
+
+
+def test_a_server_pdf_menu_item_is_an_action_not_a_print_link() -> None:
+    obs = observation()
+    obs["menu"]["items"][0] = {"label": "PDF", "description": checks.PDF_DESCRIPTION, "href": None, "target": None, "rel": None}
+    menu = next(r for r in checks.evaluate(obs, FIXTURE, FORMATS, PROFILE) if r.check == "export-menu")
+    assert menu.status == "pass" and "made on the server" in menu.detail
+
+
+def test_an_observation_recorded_before_server_pdfs_gains_no_server_rows() -> None:
+    assert server_results(observation()) == {}
+
+
+def test_the_expected_file_name_is_platforms_cleaned_title_and_utc_run_date() -> None:
+    assert checks.file_title(' Q3/Q4: "CPI" <impact>?. ') == "Q3 Q4 CPI impact"
+    assert checks.file_title("...") == "Study" and len(checks.file_title("x" * 300)) == 120
+    assert checks.file_title("a‮b\u0007c") == "a b c"
+    assert checks.expected_file_name(export_data()) == FILE_NAME
+
+
+def test_route_errors_keep_platforms_message_and_never_the_address() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(404, json={"error": "DataNotFound", "message": "Not found", "timestamp": "t"})
+        raise httpx.ConnectError(f"cannot reach {SIGNED}", request=request)
+
+    with httpx.Client(base_url="https://api.example.test", transport=httpx.MockTransport(handler)) as client:
+        exports = server_pdf.Exports(client.request)
+        assert exports.create(RUN).record() == {"status": 404, "message": "Not found"}
+        assert exports.get(EXPORT_ID).record() == {"status": 0, "error": "ConnectError"}
+    assert server_pdf.withhold_urls(f"Timeout waiting for {SIGNED}") == "Timeout waiting for [URL withheld]"
+
+
+def test_the_file_is_downloaded_without_the_bearer_and_never_past_50_mb() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=PDF_BYTES, headers={"content-disposition": "attachment"})
+
+    info, data = server_pdf.download(SIGNED, transport=httpx.MockTransport(handler))
+    assert data == PDF_BYTES and info["status"] == 200 and "authorization" not in seen[0].headers
+    info, data = server_pdf.download(SIGNED, limit=10, transport=httpx.MockTransport(handler))
+    assert info["over_limit"] is True
+
+
+def test_the_report_lists_server_pdf_results_and_the_cost_stays_honest() -> None:
+    posts = [{"fixture": "a", "via": "api", "status": 404}, {"fixture": "b", "via": "api", "status": 404}, {"fixture": "a", "via": "api (cancel)", "status": 202}]
+    statement = server_pdf.cost_statement(posts)
+    assert "asked Platform for 3 exports (1× 202, 2× 404); 1 were made" in statement
+    assert "makes no model call and creates no run" in statement and server_pdf.cost_statement([]) == ""
+    assert "(1× no answer)" in server_pdf.cost_statement([{"fixture": "a", "via": "api", "status": 0}])
+    obs = server_obs({"paper": "a4", "post": {"status": 404, "message": "Not found"}})
+    results = [r.to_json() for r in checks.evaluate(obs, FIXTURE, FORMATS, PROFILE)]
+    text = report.render(
+        {
+            "attempt": "a", "environment": "dev", "ui_url": "https://app", "backend_url": "https://api", "started_at": "t",
+            "fixtures": [{"id": "long-table", "shape": "x", "run_id": RUN, "origin": "reused", "outcome": "pass", "results": results}],
+            "cost": {"statement": "This attempt created no run." + statement},
+        }
+    )
+    assert "| pdf-server | skip |" in text and "| pdf-server-text | skip |" in text
+    assert "| long-table | pdf-server | skip | server export not deployed (POST 404 'Not found') |" in text
+    assert "creates no run." in text
