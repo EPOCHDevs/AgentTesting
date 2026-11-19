@@ -506,17 +506,104 @@ def test_cover_title_and_pdf_size_are_checked() -> None:
     assert "the run's is '2 Jan 2024 – 28 Mar 2024'" in failing(obs)["export-data"]
 
 
-def test_a_run_without_a_dashboard_should_report_nothing_to_print() -> None:
+NO_DASHBOARD = Fixture("no-dashboard", "x", match={"has_results": False})
+
+
+def test_a_run_without_a_dashboard_offering_a_cover_only_pdf_fails() -> None:
     empty = run_profile(RUN, name="Text answer", categories=[])
     obs = observation()
     obs["export"]["sections"] = []
     obs["dom"]["sections"] = []
-    result = checks.evaluate(obs, Fixture("no-dashboard", "x", match={"has_results": False}), FORMATS, empty)
-    nothing = next(r for r in result if r.check == "nothing-to-print")
+    result = {r.check: r for r in checks.evaluate(obs, NO_DASHBOARD, FORMATS, empty)}
+    assert result["export-menu"].status == "fail" and "Export offers PDF" in result["export-menu"].detail
+    nothing = result["nothing-to-print"]
     assert nothing.status == "fail" and "cover-only PDF (6 A4 pages)" in nothing.detail
-    obs["print"] = {"ready": "error", "elapsed_s": 1.0, "message": "Nothing to print"}
-    result = checks.evaluate(obs, Fixture("no-dashboard", "x"), FORMATS, empty)
-    assert {r.check: r.status for r in result}["nothing-to-print"] == "pass"
+
+
+@pytest.mark.parametrize("kind", ["placeholder", "absent"])
+def test_a_run_without_a_dashboard_passes_with_no_pdf_and_an_error_page(kind: str) -> None:
+    empty = run_profile(RUN, name="Text answer", categories=[])
+    obs = {
+        "run_id": RUN,
+        "study_id": STUDY,
+        "ai_runs": [],
+        "menu": {"found": False, "kind": kind, "items": [], "no_dashboard_notice": True},
+        "formats": {"pdf": {"offered": False}, "markdown": {"offered": False}, "space": {"offered": False}},
+        "print": {"ready": "error", "elapsed_s": 1.0, "message": "This run has no dashboard to export.\n"},
+        "print_page": {"console": [], "failed_requests": []},
+    }
+    result = {r.check: r.status for r in checks.evaluate(obs, NO_DASHBOARD, FORMATS, empty)}
+    assert result == {
+        "export-menu": "pass",
+        "format-pdf": "skip",
+        "format-markdown": "skip",
+        "format-space": "skip",
+        "nothing-to-print": "pass",
+        "print-page-clean": "pass",
+        "no-assistant-runs": "pass",
+    }
+    obs["print"]["message"] = "This run couldn’t be loaded."
+    assert "not 'This run has no dashboard to export.'" in next(
+        r.detail for r in checks.evaluate(obs, NO_DASHBOARD, FORMATS, empty) if r.check == "nothing-to-print"
+    )
+
+
+# --- a wide table printed in column parts ---------------------------------------------------------
+
+NAMES = [f"C{i}" for i in range(1, 25)]
+
+
+def part(label: str | None, headers: list[str], rows: int = 6, limit: str | None = None) -> dict:
+    return {"part": {"title": "Forecasts", "label": label, "limit_line": limit}, "header_cells": len(headers), "headers": headers, "body_rows": rows}
+
+
+def wide_observation(parts: list[dict], rows: int = 6) -> dict:
+    obs = observation()
+    table = {"kind": "table", "id": "A:1", "title": "Forecasts", "columns": [{"id": n, "name": n, "numeric": True} for n in NAMES], "rows": [NAMES] * rows}
+    obs["export"]["sections"][1]["blocks"][0] = table
+    obs["dom"]["sections"][1]["units"][0]["block"] = {"tag": "div", "text": "Forecasts", "h4": ["Forecasts"] * len(parts), "ps": [], "tables": parts}
+    return obs
+
+
+GOOD_PARTS = [
+    part("Columns 1–8 of 24", NAMES[0:8]),
+    part("Columns 9–15 of 24", ["C1", *NAMES[8:15]]),
+    part("Columns 16–22 of 24", ["C1", *NAMES[15:22]]),
+    part("Columns 23–24 of 24", ["C1", *NAMES[22:24]]),
+]
+
+
+def test_a_wide_table_printed_in_column_parts_matches_its_json() -> None:
+    obs = wide_observation(copy.deepcopy(GOOD_PARTS))
+    result = {r.check: r for r in checks.evaluate(obs, FIXTURE, FORMATS, PROFILE)}
+    assert result["sections-and-blocks"].status == "pass"
+    assert "1 wide tables printed in 4 column parts" in result["sections-and-blocks"].detail
+    single = [part("Column 9 of 9", ["C1", "C9"])]
+    assert checks._table_parts_mismatch({"title": "Forecasts", "columns": [{"name": n} for n in NAMES[:9]], "rows": [[]] * 6}, [part("Columns 1–8 of 9", NAMES[:8]), *single]) is None
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda parts: parts.pop(2), "parts show columns"),
+        (lambda parts: parts[1].update(headers=NAMES[8:15]), "part 'Columns 9–15 of 24' has columns"),
+        (lambda parts: parts[1]["part"].update(label=None), "part 2 has no 'Columns a–b of 24' label"),
+        (lambda parts: parts[3].update(body_rows=5), "prints 5 rows, expected 6"),
+        (lambda parts: parts[0]["part"].update(label="Columns 1–8 of 25"), "doesn't fit its 24 columns"),
+    ],
+)
+def test_column_parts_must_cover_every_column_with_the_row_label(change, message: str) -> None:  # noqa: ANN001
+    parts = copy.deepcopy(GOOD_PARTS)
+    change(parts)
+    assert message in failing(wide_observation(parts))["sections-and-blocks"]
+
+
+def test_every_column_part_of_a_long_table_carries_the_limit_line() -> None:
+    line = "Showing 200 of 250 rows. The Markdown export has every row."
+    parts = [part(p["part"]["label"], p["headers"], rows=200, limit=line) for p in GOOD_PARTS]
+    assert statuses(wide_observation(parts, rows=250))["row-limit"] == "pass"
+    parts[2]["part"]["limit_line"] = None
+    assert "(Columns 16–22 of 24) has no limit line" in failing(wide_observation(parts, rows=250))["row-limit"]
 
 
 def test_noisy_print_pages_and_assistant_runs_fail() -> None:

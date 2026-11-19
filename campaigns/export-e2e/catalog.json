@@ -157,7 +157,7 @@
         "has_results": false
       },
       "notes": [
-        "The study page says “This run didn’t publish a dashboard.” The Terminal documents data-export-ready=\"error\" when there's nothing to print."
+        "Expected (EpochClientPortal#286): no PDF is offered (Export is the “isn’t available yet” placeholder, or absent in a showcase), and the print route answers data-export-ready=\"error\" with “This run has no dashboard to export.”"
       ]
     },
     {

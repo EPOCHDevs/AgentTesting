@@ -33,6 +33,8 @@ from tools.agent_testing import Stack
 # The Terminal refreshes its ID token 15 minutes before expiry; without a refresh
 # token that would sign the browser out, so every context starts with at least this.
 MIN_TOKEN_SECONDS = 35 * 60
+# What the study page says for a completed run without result categories.
+NO_DASHBOARD_NOTICE = "This run didn’t publish a dashboard."
 # The printable width of a portrait page with 15 mm margins, in CSS pixels.
 PAGE_CONTENT_WIDTH = {"A4": 680, "Letter": 703}
 # Starting an assistant run is a POST to a thread's runs (or a stateless run).
@@ -209,13 +211,23 @@ class Terminal:
                 "error": f"{self.ui_url} showed its sign-in page: it did not accept the seeded "
                 f"{self.stack.environment} login (is it built for user pool client {self.stack.user_pool_client_id}?).",
             }
-        # The working menu is a Radix trigger; the placeholder for an unfinished run isn't.
+        # The working menu is a Radix trigger; the "isn't available yet" placeholder isn't. A run
+        # that published no dashboard says so, and may keep the placeholder (or, in a showcase,
+        # no Export at all): wait for whichever comes first.
         trigger = page.locator('button[aria-haspopup="menu"]', has_text="Export")
+        no_dashboard = page.get_by_text(NO_DASHBOARD_NOTICE)
         try:
-            trigger.wait_for(state="visible", timeout=120_000)
+            trigger.or_(no_dashboard).first.wait_for(state="visible", timeout=120_000)
         except PlaywrightTimeout:
             page.screenshot(path=str(out / "study.png"))
-            return {"found": False, "error": "The study page showed no Export menu within 120s."}
+            return {"found": False, "kind": "absent", "error": "The study page showed no Export menu within 120s."}
+        if not trigger.is_visible():
+            page.wait_for_timeout(2_000)  # The header settles with the page's notice.
+        if not trigger.is_visible():
+            placeholder = page.locator("button:not([aria-haspopup])", has_text="Export")
+            kind = "placeholder" if placeholder.count() else "absent"
+            page.screenshot(path=str(out / "study.png"))
+            return {"found": False, "kind": kind, "url": url, "no_dashboard_notice": True, "items": []}
         trigger.click()
         menu = page.get_by_role("menu")
         menu.wait_for(state="visible", timeout=15_000)
@@ -236,7 +248,7 @@ class Terminal:
         page.screenshot(path=str(out / "menu.png"))
         page.keyboard.press("Escape")
         pdf = next((i for i in details["items"] if i["label"] == "PDF"), None)
-        return {"found": True, "url": url, **details, "print_href": pdf["href"] if pdf else None}
+        return {"found": True, "kind": "menu", "url": url, **details, "print_href": pdf["href"] if pdf else None}
 
     def _print(self, page: Page, href: str, out: Path) -> dict[str, object]:
         url = self.ui_url + href if href.startswith("/") else href

@@ -7,6 +7,7 @@ so dates are formatted in UTC here too.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -20,6 +21,9 @@ PRINT_ROW_LIMIT = 200
 USAGE_LIMIT_NOTICE = "AI summary not generated: usage limit reached"
 CHART_FAILED = "This chart couldn’t load."
 GRAPH_MESSAGE = "Relationship graphs aren’t included in exports yet."
+NO_DASHBOARD_MESSAGE = "This run has no dashboard to export."
+# A wide table may print in column parts, each labelled with the columns it shows.
+COLUMNS_LABEL = re.compile(r"^Columns? (\d+)(?:–(\d+))? of (\d+)$")
 # A chart image is blank when it is (almost) one colour.
 MIN_NON_BACKGROUND = 0.002
 MIN_DISTINCT_COLOURS = 3
@@ -140,15 +144,7 @@ def _block_mismatch(expected: Mapping[str, object], seen: Mapping[str, object] |
         tables = seen.get("tables") or []
         if not tables:
             return f"table {title!r} is not drawn"
-        drawn = tables[0]
-        columns = expected.get("columns") or []
-        rows = expected.get("rows") or []
-        if drawn.get("header_cells") != len(columns):  # type: ignore[arg-type]
-            return f"table {title!r} has {drawn.get('header_cells')} columns, expected {len(columns)}"  # type: ignore[arg-type]
-        shown = min(len(rows), PRINT_ROW_LIMIT) or 1  # type: ignore[arg-type]  # "No rows to show."
-        if drawn.get("body_rows") != shown:
-            return f"table {title!r} prints {drawn.get('body_rows')} rows, expected {shown}"
-        return None
+        return _table_parts_mismatch(expected, tables)
     if kind == "metrics":
         metrics = seen.get("metrics")
         count = len(expected.get("metrics") or [])  # type: ignore[arg-type]
@@ -171,6 +167,65 @@ def _block_mismatch(expected: Mapping[str, object], seen: Mapping[str, object] |
             return f"text {title!r} has no title"
         return None
     return f"unknown block kind {kind!r}"
+
+
+def _table_parts_mismatch(
+    expected: Mapping[str, object], tables: Sequence[Mapping[str, object]]
+) -> str | None:
+    """A table printed whole, or in column parts: each part the first column plus its own slice,
+    labelled "Columns a–b of N", together showing every column once, each printing the rows."""
+    title = norm(expected.get("title"))
+    names = [norm(c.get("name")) for c in expected.get("columns") or []]  # type: ignore[union-attr]
+    shown = min(len(expected.get("rows") or []), PRINT_ROW_LIMIT) or 1  # type: ignore[arg-type]  # "No rows to show."
+
+    def columns_differ(drawn: Mapping[str, object], want: list[object]) -> str | None:
+        if "headers" in drawn:
+            return None if drawn["headers"] == want else f"columns {drawn['headers']}, expected {want}"
+        count = drawn.get("header_cells")
+        return None if count == len(want) else f"{count} columns, expected {len(want)}"
+
+    labels = [(t.get("part") or {}).get("label") for t in tables]
+    if len(tables) == 1 and not labels[0]:
+        wrong = columns_differ(tables[0], names)
+        if wrong:
+            return f"table {title!r} has {wrong}"
+        if tables[0].get("body_rows") != shown:
+            return f"table {title!r} prints {tables[0].get('body_rows')} rows, expected {shown}"
+        return None
+    covered: list[int] = []
+    for index, (drawn, label) in enumerate(zip(tables, labels), start=1):
+        found = COLUMNS_LABEL.match(label or "")
+        if not found:
+            return f"table {title!r} part {index} has no 'Columns a–b of {len(names)}' label"
+        first, last, total = int(found[1]), int(found[2] or found[1]), int(found[3])
+        if total != len(names) or not 1 <= first <= last <= len(names):
+            return f"table {title!r} part {label!r} doesn't fit its {len(names)} columns"
+        part_title = (drawn.get("part") or {}).get("title")  # type: ignore[union-attr]
+        if part_title != title:
+            return f"table {title!r} part {label!r} is titled {part_title!r}"
+        own = names[first - 1 : last]
+        wrong = columns_differ(drawn, own if first == 1 else [names[0], *own])
+        if wrong:
+            return f"table {title!r} part {label!r} has {wrong}"
+        if drawn.get("body_rows") != shown:
+            return f"table {title!r} part {label!r} prints {drawn.get('body_rows')} rows, expected {shown}"
+        covered.extend(range(first, last + 1))
+    if covered != list(range(1, len(names) + 1)):
+        return f"table {title!r} parts show columns {covered}, not 1 to {len(names)} once each"
+    return None
+
+
+def check_no_dashboard_menu(obs: Mapping[str, object]) -> Result:
+    """A run that published no dashboard offers no PDF: the placeholder, or no Export at all."""
+    menu = obs.get("menu") or {}
+    assert isinstance(menu, Mapping)
+    kind = menu.get("kind") or ("menu" if menu.get("found") else "absent")
+    if kind == "placeholder":
+        return Result("export-menu", PASS, "No dashboard: Export is the “isn’t available yet” placeholder")
+    if kind == "absent":
+        return Result("export-menu", PASS, "No dashboard: the study page shows no Export")
+    offered = ", ".join(str(i.get("label")) for i in menu.get("items") or [])  # type: ignore[union-attr]
+    return Result("export-menu", FAIL, f"The run published no dashboard, yet Export offers {offered or 'a menu'}")
 
 
 def check_menu(obs: Mapping[str, object], formats: Sequence[Format]) -> Result:
@@ -325,7 +380,14 @@ def check_sections(obs: Mapping[str, object]) -> Result:
     if problems:
         more = f" (+{len(problems) - 8} more)" if len(problems) > 8 else ""
         return Result("sections-and-blocks", FAIL, "; ".join(problems[:8]) + more)
-    return Result("sections-and-blocks", PASS, f"All {len(sections)} sections and {total} blocks printed in order")
+    split = [
+        len(unit["block"]["tables"])
+        for section in drawn
+        for unit in section.get("units") or []
+        if unit.get("block") and len(unit["block"].get("tables") or []) > 1
+    ]
+    parts = f"; {len(split)} wide tables printed in {sum(split)} column parts" if split else ""
+    return Result("sections-and-blocks", PASS, f"All {len(sections)} sections and {total} blocks printed in order{parts}")
 
 
 def check_images(obs: Mapping[str, object]) -> Result:
@@ -378,7 +440,9 @@ def check_overflow(obs: Mapping[str, object]) -> Result:
     problems = []
     for paper, measured in overflow.items():
         for table in measured:
-            name = table.get("title") or f"table {table.get('index')}"
+            name = (table.get("title") or f"table {table.get('index')}") + (
+                f" ({table['label']})" if table.get("label") else ""
+            )
             if table.get("overflowing_cells"):
                 examples = ", ".join(
                     f"row {e['row']} col {e['column']} {e['text']!r} +{e['overflow_px']}px" for e in table.get("examples", [])[:2]
@@ -405,7 +469,7 @@ def check_words(obs: Mapping[str, object]) -> Result:
         total = sum(int(t["broken_words"]) for t in broken)
         if broken:
             examples = "; ".join(
-                f"{t.get('title') or t.get('index')!r} ({t.get('columns')} columns): "
+                f"{t.get('title') or t.get('index')!r}{' ' + t['label'] if t.get('label') else ''} ({t.get('columns')} columns): "
                 + ", ".join(repr(e["word"]) for e in t.get("broken_examples", [])[:4])
                 for t in broken[:3]
             )
@@ -441,15 +505,21 @@ def check_row_limit(obs: Mapping[str, object]) -> Result:
             problems.append(f"{table.get('title')!r} not printed")
             continue
         block = candidates.pop(0)
-        printed = block["tables"][0].get("body_rows")  # type: ignore[index]
-        if rows > PRINT_ROW_LIMIT:
-            long_tables += 1
-            if printed != PRINT_ROW_LIMIT:
-                problems.append(f"{table.get('title')!r} prints {printed} of {rows} rows")
-            if line not in (block.get("ps") or []):
-                problems.append(f"{table.get('title')!r} has no limit line {line!r}")
-        elif any(str(p).startswith("Showing ") for p in block.get("ps") or []):  # type: ignore[union-attr]
-            problems.append(f"{table.get('title')!r} has a limit line with only {rows} rows")
+        # Each printed part (or the whole table) carries the rows and its limit line.
+        for drawn in block["tables"]:  # type: ignore[union-attr]
+            part = drawn.get("part") or {}
+            name = f"{table.get('title')!r}" + (f" ({part['label']})" if part.get("label") else "")
+            limit = part.get("limit_line") if "part" in drawn else next(
+                (p for p in block.get("ps") or [] if str(p).startswith("Showing ")), None  # type: ignore[union-attr]
+            )
+            if rows > PRINT_ROW_LIMIT:
+                if drawn.get("body_rows") != PRINT_ROW_LIMIT:
+                    problems.append(f"{name} prints {drawn.get('body_rows')} of {rows} rows")
+                if limit != line:
+                    problems.append(f"{name} has no limit line {line!r}")
+            elif limit:
+                problems.append(f"{name} has a limit line with only {rows} rows")
+        long_tables += rows > PRINT_ROW_LIMIT
     if problems:
         return Result("row-limit", FAIL, "; ".join(problems[:6]))
     if long_tables:
@@ -595,7 +665,10 @@ def check_nothing_to_print(obs: Mapping[str, object]) -> Result:
     assert isinstance(printed, Mapping)
     ready = printed.get("ready")
     if ready == "error":
-        return Result("nothing-to-print", PASS, f"data-export-ready=error: {printed.get('message')!r}")
+        message = " ".join(str(printed.get("message") or "").split())
+        if NO_DASHBOARD_MESSAGE in message:
+            return Result("nothing-to-print", PASS, f"data-export-ready=error: {NO_DASHBOARD_MESSAGE!r}")
+        return Result("nothing-to-print", FAIL, f"data-export-ready=error, but it says {message[:200]!r}, not {NO_DASHBOARD_MESSAGE!r}")
     if ready == "true":
         export = obs.get("export") if isinstance(obs.get("export"), Mapping) else {}
         sections = len(export.get("sections") or [])  # type: ignore[union-attr]
@@ -615,7 +688,7 @@ def evaluate(
 ) -> list[Result]:
     empty = run is not None and run.status == "completed" and not run.categories
     results = [
-        check_menu(obs, formats),
+        check_no_dashboard_menu(obs) if empty else check_menu(obs, formats),
         *check_formats(obs, formats),
         check_nothing_to_print(obs) if empty else check_ready(obs),
     ]

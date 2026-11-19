@@ -8,6 +8,20 @@ async (mode) => {
     return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("")
   }
 
+  // The printed part a table belongs to: its title, the "Columns a–b of N" label of a
+  // table printed in column parts, and the part's row-limit line.
+  const COLUMNS_LABEL = /^Columns? \d+(–\d+)? of \d+$/
+  const tablePart = (table, stop) => {
+    let part = table.parentElement
+    while (part && part !== stop && !part.querySelector("h4")) part = part.parentElement
+    const paragraphs = [...(part?.querySelectorAll("p") ?? [])].filter((p) => !table.contains(p)).map(text)
+    return {
+      title: text(part?.querySelector("h4")),
+      label: paragraphs.find((value) => COLUMNS_LABEL.test(value)) ?? null,
+      limit_line: paragraphs.find((value) => value.startsWith("Showing ")) ?? null,
+    }
+  }
+
   // A unit is one KeepTogether box: the section heading (first unit only), an
   // optional sub-heading, and one block.
   const describeBlock = async (block) => {
@@ -16,7 +30,7 @@ async (mode) => {
     const result = {
       tag: block.tagName.toLowerCase(),
       text: text(block)?.slice(0, 400) ?? "",
-      h4: own("h4").map(text),
+      h4: [...block.querySelectorAll("h4")].map(text),
       ps: own("p").map(text),
     }
     if (block.tagName === "FIGURE") {
@@ -43,6 +57,7 @@ async (mode) => {
     const tables = [...block.querySelectorAll("table")]
     if (tables.length) {
       result.tables = tables.map((table) => ({
+        part: tablePart(table, block.parentElement),
         caption: text(table.querySelector("caption")),
         header_cells: table.querySelectorAll("thead th").length,
         headers: [...table.querySelectorAll("thead th")].map(text),
@@ -174,8 +189,7 @@ async (mode) => {
     if (!article) return []
     const page = article.getBoundingClientRect()
     return [...article.querySelectorAll("table")].map((table, index) => {
-      let owner = table.parentElement
-      while (owner && owner !== article && !owner.querySelector(":scope > h4")) owner = owner.parentElement
+      const part = tablePart(table, article)
       const rect = table.getBoundingClientRect()
       const cells = []
       const broken = []
@@ -199,7 +213,8 @@ async (mode) => {
       const wrapper = table.parentElement
       return {
         index,
-        title: text(owner?.querySelector(":scope > h4")) ?? null,
+        title: part.title,
+        label: part.label,
         columns: table.querySelectorAll("thead th").length,
         table_width: Math.round(rect.width),
         page_width: Math.round(page.width),
