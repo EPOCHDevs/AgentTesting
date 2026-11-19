@@ -155,3 +155,12 @@ def test_untracked_local_artifacts_are_preserved(projects):
     extra.write_text("keep me")
     assert local_stack.verify_primary_checkouts()["EpochBackend"]["branch"] == "main"
     assert extra.read_text() == "keep me"
+
+
+def test_platform_runs_from_its_primary_dev_checkout(projects):
+    _, paths = local_stack.primary_paths(projects / "missing.toml")
+    assert paths["platform_dir"] == projects / "EpochPlatform"
+    assert local_stack.verify_primary_checkouts()["EpochPlatform"]["branch"] == "dev"
+    git(projects / "EpochPlatform", "switch", "-c", "feature")
+    with pytest.raises(ValueError, match="check out dev"):
+        local_stack.verify_primary_checkouts()

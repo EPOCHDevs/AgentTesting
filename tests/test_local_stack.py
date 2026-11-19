@@ -34,15 +34,28 @@ def test_occupied_port_is_not_reused():
 
 @pytest.mark.parametrize("operator_revision", [None, "", "  ", "operator-deployment-7"])
 def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision):
-    ai, ui, backend = [
-        tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend")
+    ai, ui, backend, platform = [
+        tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend", "EpochPlatform")
     ]
     monkeypatch.setattr(local_stack, "PROJECT_ROOT", tmp_path)
     ai_commit = "a" * 40
     monkeypatch.setattr(
         local_stack, "verify_primary_checkouts",
-        lambda: {"EpochAI": {"commit": ai_commit, "branch": "main", "path": str(ai)}},
+        lambda: {
+            "EpochAI": {"commit": ai_commit, "branch": "main", "path": str(ai)},
+            "EpochPlatform": {"commit": "p" * 40, "branch": "dev", "path": str(platform)},
+        },
     )
+    (platform / "node_modules/typescript").mkdir(parents=True)
+    builds = []
+
+    def build(command, cwd, env, **_):
+        builds.append((command, cwd, env))
+        (platform / "apps/platform/dist").mkdir(parents=True, exist_ok=True)
+        (platform / "apps/platform/dist/main.js").touch()
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_stack.subprocess, "run", build)
     for file in (
         backend / "build/bin/epoch_stratifyx_server",
         ai / ".venv/bin/langgraph",
@@ -56,9 +69,11 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     (backend / "services/stratifyx").mkdir(parents=True)
     (backend / "services/stratifyx/.env.local").write_text(
         "EPOCH_ENVIRONMENT=prod\nEPOCH_SKIP_AUTH=1\nVENDOR_KEY=private\n"
+        "EPOCH_TOKEN_ISSUER=http://localhost:2024\n"
     )
     (ai / ".env").write_text(
         "EPOCH_CAMPAIGN_SERVER=https://wrong.example\nMODEL_KEY=private\n"
+        "EPOCH_FILES_WORKER_URL=https://services.dev.example\n"
         + (f'EPOCH_COMMENTARY_DEPLOYMENT_REVISION="{operator_revision}"\n'
            if operator_revision is not None else "")
     )
@@ -81,9 +96,33 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     )
     stack = Stack.load(Path("environments.toml"), "local")
     state = local_stack.private_dir(tmp_path / "state")
+    monkeypatch.setenv("AWS_PROFILE", "operator")
     services = local_stack.prepare(config, stack, state)
-    assert len(services) == 3
-    be, _agent, portal = services
+    assert [service[0] for service in services] == ["Backend", "Platform", "FrontDoor", "AI", "UI"]
+    be, files, door, _agent, portal = services
+    # The front door answers the profile's API origin, as the load balancer answers api.<env>.
+    assert be[1][-1] == be[3]["PORT"] == str(local_stack.BACKEND_PORT)
+    assert be[4] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}/api/v1/health"
+    assert door[1][1:] == [str(local_stack.FRONT_DOOR), "9000", str(local_stack.BACKEND_PORT), str(local_stack.PLATFORM_PORT)]
+    assert door[4] == stack.backend_url + "/api/v1/platform/health"
+    # Platform serves Files and Space from the engine's personal content, with no AWS account.
+    assert builds == [([files[1][0], "node_modules/typescript/bin/tsc", "-b"], platform, builds[0][2])]
+    assert files[1][1:] == ["apps/platform/dist/main.js"] and files[2] == platform
+    assert files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(state / "backend/personal_content")
+    assert files[3]["EPOCH_DEFINITIONS_LOCAL_ROOT"] == str(state / "backend/definitions")
+    assert files[3]["EPOCH_ENVIRONMENT"] == "local" and files[3]["EPOCH_PLATFORM_ROLE"] == "general"
+    assert files[3]["PORT"] == str(local_stack.PLATFORM_PORT)
+    assert files[3]["EPOCH_PLATFORM_REVISION"] == "p" * 40
+    assert files[3]["COGNITO_CLIENT_IDS"].split(",") == [local_stack.CLIENT, local_stack.CLI_CLIENT]
+    assert files[3]["EPOCH_TOKEN_ISSUER"] == "http://localhost:2024"
+    assert files[3]["EPOCH_TOKEN_JWKS_URL"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}/api/v1/auth/jwks"
+    assert "AWS_PROFILE" not in files[3] and files[3]["AWS_SHARED_CREDENTIALS_FILE"] == files[3]["AWS_CONFIG_FILE"] == "/dev/null"
+    assert "VENDOR_KEY" not in files[3] and "MODEL_KEY" not in files[3]
+    # The Files workers' credential is Platform's and the agent's, no longer Backend's.
+    token = files[3][local_stack.WORKER_TOKEN]
+    assert _agent[3][local_stack.WORKER_TOKEN] == token and local_stack.WORKER_TOKEN not in be[3]
+    for name in ("EPOCH_DOCUMENT_BACKEND_URL", "EPOCH_FILES_WORKER_URL"):
+        assert _agent[3][name] == stack.backend_url
     assert be[3]["EPOCH_ENVIRONMENT"] == "local"
     assert be[3]["EPOCH_SKIP_AUTH"] == "0"
     assert be[3]["EPOCH_AI_URL"] == stack.ai_url
@@ -111,6 +150,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert generated["store"]["index"]["embed"] == str(ai / "embeddings.py") + ":embed"
     assert (state / "ai/langgraph.json").stat().st_mode & 0o777 == 0o600
     assert json.loads((ai / "langgraph.json").read_text()) == graph
+    assert generated["env"]["EPOCH_FILES_WORKER_URL"] == stack.backend_url
     for _, command, _, env, _ in services:
         assert "EPOCH_TOKEN" not in env and "TEST_EPOCH_PASSWORD" not in env
         assert "private" not in " ".join(command)
@@ -389,13 +429,13 @@ def test_up_container_env_reaches_the_host_and_mounts_named_dirs(tmp_path, monke
 
 
 def test_source_access_shares_one_kept_token_and_enables_web_with_exa(tmp_path):
-    backend, ai = local_stack.source_access(
+    files, ai = local_stack.source_access(
         tmp_path, "http://localhost:9000", {}, {"EXA_API_KEY": "exa", "KEEP": "1"}
     )
-    token = backend[local_stack.WORKER_TOKEN]
+    token = files[local_stack.WORKER_TOKEN]
     assert len(token) >= 32 and ai[local_stack.WORKER_TOKEN] == token
     assert (tmp_path / "document-worker-token").stat().st_mode & 0o077 == 0
-    assert ai["EPOCH_DOCUMENT_BACKEND_URL"] == "http://localhost:9000"
+    assert ai["EPOCH_DOCUMENT_BACKEND_URL"] == ai["EPOCH_FILES_WORKER_URL"] == "http://localhost:9000"
     assert ai["EPOCH_WEB_RESEARCH_ENABLED"] == "true" and ai["KEEP"] == "1"
     journal = Path(ai["EPOCH_WEB_RESEARCH_JOURNAL"])
     assert journal == (tmp_path / "ai/web-journal") and journal.stat().st_mode & 0o077 == 0
@@ -403,14 +443,17 @@ def test_source_access_shares_one_kept_token_and_enables_web_with_exa(tmp_path):
     assert again[local_stack.WORKER_TOKEN] == token  # kept across restarts
 
 
-def test_source_access_keeps_operator_settings(tmp_path):
-    backend, ai = local_stack.source_access(
+def test_source_access_keeps_operator_settings_but_not_another_files(tmp_path):
+    files, ai = local_stack.source_access(
         tmp_path,
         "http://localhost:9000",
         {local_stack.WORKER_TOKEN: "b" * 40},
-        {"EXA_API_KEY": "exa", "EPOCH_WEB_RESEARCH_ENABLED": "false"},
+        {"EXA_API_KEY": "exa", "EPOCH_WEB_RESEARCH_ENABLED": "false",
+         "EPOCH_DOCUMENT_BACKEND_URL": "https://api.dev.example",
+         "EPOCH_FILES_WORKER_URL": "https://services.dev.example"},
     )
-    assert backend[local_stack.WORKER_TOKEN] == ai[local_stack.WORKER_TOKEN] == "b" * 40
+    assert files[local_stack.WORKER_TOKEN] == ai[local_stack.WORKER_TOKEN] == "b" * 40
+    assert ai["EPOCH_DOCUMENT_BACKEND_URL"] == ai["EPOCH_FILES_WORKER_URL"] == "http://localhost:9000"
     assert ai["EPOCH_WEB_RESEARCH_ENABLED"] == "false"
     assert "EPOCH_WEB_RESEARCH_JOURNAL" not in ai
     assert not (tmp_path / "document-worker-token").exists()
