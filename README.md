@@ -259,3 +259,53 @@ research acceptance is claimed; complete agent-trace validation needs an
 accessible thread in the selected environment.
 Keep credentials and raw session artifacts outside version control. Publish
 reviewed examples only.
+
+## Check study exports
+
+`tools.export_e2e` exports one study run per shape the Terminal can export and
+checks the result in headless Chrome. The fixtures are listed in
+[`campaigns/export-e2e/catalog.json`](campaigns/export-e2e/catalog.json).
+
+```bash
+.venv/bin/python -m tools.export_e2e --env dev run                      # every fixture
+.venv/bin/python -m tools.export_e2e --env dev run --only wide-table
+.venv/bin/python -m tools.export_e2e --env dev prepare                  # pin or create runs only
+.venv/bin/python -m tools.export_e2e --env dev inventory --refresh      # which runs fit which shape
+.venv/bin/python -m tools.export_e2e recheck ATTEMPT                    # re-judge saved evidence offline
+.venv/bin/python -m tools.export_e2e --env dev run --ui-url http://localhost:3002
+```
+
+`--ui-url` drives a Terminal on this machine, for example a Vite dev server of an
+unmerged branch built against the dev API, with dev's Backend, sign-in and
+fixtures. Only a loopback origin is accepted, because the browser is signed in
+there. The attempt is named after the override and records it, so its results
+aren't read as dev's.
+
+It uses the installed Google Chrome (`channel="chrome"`); it never downloads a
+browser. Sign in first with `tools.agent_testing --env dev login`. The browser
+gets the cached ID and access tokens in localStorage, under the keys Amplify
+reads, but never the refresh token.
+
+For each fixture the suite opens the study page's Export menu, then the print
+route, and waits for `data-export-ready`. It checks the rendered page against the
+export JSON the page embeds: sections and blocks, chart images, the cover, the
+file name, the 200-row limit, the usage-limit notice, and table cells at A4 and
+Letter widths. It then makes A4 and Letter PDFs. Each format is a check in
+`catalog.json`. A format is skipped while the Export menu doesn't offer it, and
+fails when the menu offers it but the suite has no check for it yet.
+
+The suite reuses the owner's existing runs where it can. A shape that no
+existing run has comes from a script in `campaigns/export-e2e/scripts`. Those
+scripts are research-only, source-free and without `llm_call`, so Backend makes
+no model call for them. The report text of backtests, Monte Carlo and tuning
+runs is charged to the owner's AI allowance. The suite never creates a backtest,
+and creates a Monte Carlo or tuning run only when the owner approves the cost:
+`prepare --allow-ai-cost monte-carlo` (or `tuning`) makes one, and reads the
+usage meters before the request and a minute after the run settles.
+Pinned and created run ids are kept per environment in the git-ignored
+`.artifacts/export-e2e/state-<env>.json`, so a rerun reuses them and never
+makes duplicates.
+
+Each attempt writes to `.artifacts/<attempt>/`: `report.md`, `summary.json`, and
+per fixture the PDFs, a picture of page 1, the export data without its images,
+and the raw observation. The command exits 1 when a check fails.
