@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -34,6 +35,19 @@ MIN_DISTINCT_COLOURS = 3
 # PDF page sizes in points, as Chrome writes them.
 PAPER_POINTS = {"A4": (595.92, 842.88), "Letter": (612.0, 792.0)}
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+# Server-made PDFs (EpochPlatform docs/contracts/exports.md; the Terminal's pdfExport).
+PREPARING_TOAST = "Preparing your PDF…"
+NOT_DEPLOYED = "server export not deployed"
+UNAVAILABLE = "unavailable"
+LIMIT_REACHED = "hourly export limit reached"
+# Platform's own 404 for a run that doesn't exist or isn't the caller's. Any other 404 to POST is a
+# route that isn't there yet (Platform's "Not found", or a load balancer's), as the Terminal reads it.
+RUN_NOT_FOUND = "Run not found"
+SERVER_MAX_BYTES = 50 * 1024 * 1024
+SERVER_TIMEOUT_S = 120
+# Platform's exportFileName: the title cleaned for every file system, at most 120 characters.
+FILE_NAME_CONTROLS = re.compile("[\u0000-\u001f\u007f-\u009f؜​-‏ -‮⁠-⁯﻿]")
 
 PASS, FAIL, SKIP = "pass", "fail", "skip"
 
@@ -256,13 +270,17 @@ def check_menu(obs: Mapping[str, object], formats: Sequence[Format]) -> Result:
     else:
         if pdf.get("description") != PDF_DESCRIPTION:
             problems.append(f"PDF description {pdf.get('description')!r}")
-        if pdf.get("href") != expected:
-            problems.append(f"PDF opens {pdf.get('href')!r}, expected {expected!r}")
-        if pdf.get("target") != "_blank" or "noopener" not in str(pdf.get("rel") or ""):
-            problems.append("PDF does not open in a new tab without an opener")
+        # A Terminal with server PDFs makes PDF an action, not a link (pdf-server-ui clicks it).
+        if pdf.get("href") is not None:
+            if pdf.get("href") != expected:
+                problems.append(f"PDF opens {pdf.get('href')!r}, expected {expected!r}")
+            if pdf.get("target") != "_blank" or "noopener" not in str(pdf.get("rel") or ""):
+                problems.append("PDF does not open in a new tab without an opener")
     offered = ", ".join(str(i.get("label")) for i in items)
     if problems:
         return Result("export-menu", FAIL, "; ".join(problems))
+    if pdf and pdf.get("href") is None:
+        return Result("export-menu", PASS, f"Offers {offered}; note correct; PDF is made on the server (no print link)")
     return Result("export-menu", PASS, f"Offers {offered}; note and print link correct")
 
 
@@ -757,6 +775,262 @@ def check_nothing_to_print(obs: Mapping[str, object]) -> Result:
     return Result("nothing-to-print", FAIL, f"No data-export-ready within {printed.get('elapsed_s')}s")
 
 
+# --- server-made PDFs ------------------------------------------------------------------
+
+
+def file_title(title: str) -> str:
+    """Platform's `fileTitle`: no control or bidi characters, path separators or characters
+    Windows refuses, no leading or trailing dots and spaces, at most 120 characters."""
+    cleaned = FILE_NAME_CONTROLS.sub(" ", unicodedata.normalize("NFC", title))
+    cleaned = re.sub(r'[\\/:*?"<>|]', " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    trimmed = re.sub(r"^[\s.]+|[\s.]+$", "", cleaned[:120])
+    return trimmed or "Study"
+
+
+def expected_file_name(export: Mapping[str, object]) -> str:
+    """"<study title> – <run date>.pdf", the run date in UTC, as Platform names the file."""
+    study = export["study"]
+    assert isinstance(study, Mapping)
+    return f"{file_title(str(study['title']))} – {day(parse_instant(str(study['runDate'])))}.pdf"
+
+
+def server_unavailable(status: object, message: object) -> str | None:
+    """Why a refused POST means the server export isn't live (a skip), or None when it is a real answer.
+
+    404 is a route that isn't deployed, unless Platform says the run isn't found; 503 is exports
+    not available. The Terminal falls back to printing in the browser on both.
+    """
+    if status == 404 and message != RUN_NOT_FOUND:
+        return NOT_DEPLOYED
+    if status == 503:
+        return UNAVAILABLE
+    return None
+
+
+def _answer(post: Mapping[str, object]) -> str:
+    status, message = post.get("status") or post.get("error"), post.get("message")
+    return f"POST {status}" + (f" {message!r}" if message else "")
+
+
+def _not_live(post: Mapping[str, object]) -> Result | None:
+    """The skip for a POST that found no live service or the hourly limit, else None."""
+    reason = server_unavailable(post.get("status"), post.get("message"))
+    if reason:
+        return Result("", SKIP, f"{reason} ({_answer(post)})")
+    if post.get("status") == 429:
+        return Result("", SKIP, f"{LIMIT_REACHED} ({_answer(post)}, Retry-After {post.get('retry_after')})")
+    return None
+
+
+def _timeline(server: Mapping[str, object]) -> str:
+    steps = " → ".join(f"{t.get('state')} {t.get('at_s')}s" for t in server.get("transitions") or [])  # type: ignore[union-attr]
+    return f"{steps} ({server.get('polls')} polls)"
+
+
+def check_pdf_server(obs: Mapping[str, object], empty: bool) -> Result:
+    """The run's PDF made on the server through the API: ready within 2 minutes, a PDF with pages,
+    under 50 MB, named "<title> – <run date>.pdf". A run without a dashboard is refused (422), or
+    accepted and then failed cleanly as `no_dashboard`."""
+    name = "pdf-server"
+    server = obs.get("server_pdf")
+    if not isinstance(server, Mapping):
+        return Result(name, SKIP, "Not tried")
+    if server.get("error"):
+        return Result(name, FAIL, f"The suite could not complete the export: {server['error']}")
+    post = server.get("post") or {}
+    assert isinstance(post, Mapping)
+    skipped = _not_live(post)
+    if skipped:
+        return Result(name, SKIP, skipped.detail)
+    status, final = post.get("status"), server.get("export") or {}
+    assert isinstance(final, Mapping)
+    if empty:
+        if status == 422:
+            return Result(name, PASS, f"No dashboard: refused with {_answer(post)}")
+        if status == 202 and server.get("outcome") == "final":
+            reason = (final.get("failure") or {}).get("reason")  # type: ignore[union-attr]
+            if final.get("state") == "failed" and reason == "no_dashboard":
+                return Result(name, PASS, f"No dashboard: accepted, then failed as no_dashboard: {_timeline(server)}")
+            return Result(name, FAIL, f"The run published no dashboard, yet its export ended {final.get('state')} ({reason}): {_timeline(server)}")
+        return Result(name, FAIL, f"The run published no dashboard: {_answer(post)}, expected 422 or a no_dashboard failure")
+    if status == 422:
+        return Result(name, SKIP, f"Platform can't export this run on the server ({_answer(post)}); the Terminal prints it in the browser")
+    if status != 202:
+        return Result(name, FAIL, f"{_answer(post)}, expected 202")
+    notes = [f"GET answered {e.get('status') or e.get('error')} at {e.get('at_s')}s" for e in server.get("errors") or []]  # type: ignore[union-attr]
+    if server.get("outcome") == "timeout":
+        return Result(name, FAIL, f"Not final within {SERVER_TIMEOUT_S}s: {_timeline(server)}", notes)
+    if server.get("outcome") == "gone":
+        return Result(name, FAIL, f"The export was gone (GET 404) while queued: {_timeline(server)}", notes)
+    if final.get("state") != "ready":
+        failure = final.get("failure") or {}
+        assert isinstance(failure, Mapping)
+        return Result(name, FAIL, f"Ended {final.get('state')} {failure.get('reason')!r} {failure.get('message')!r}: {_timeline(server)}", notes)
+    got = server.get("download") or {}
+    assert isinstance(got, Mapping)
+    problems = []
+    if got.get("status") != 200 or got.get("error"):
+        problems.append(f"the download answered {got.get('status') or got.get('error')}")
+    elif got.get("over_limit") or (got.get("bytes") or 0) >= SERVER_MAX_BYTES:
+        problems.append("the file is 50 MB or more")
+    else:
+        if not got.get("pdf_header"):
+            problems.append("the file is not a PDF (no %PDF- header)")
+        if (got.get("pages") or 0) < 1:
+            problems.append("the PDF has no pages")
+    if not str(got.get("content_disposition") or "").startswith("attachment"):
+        problems.append(f"Content-Disposition {got.get('content_disposition')!r}, expected an attachment")
+    file_name = final.get("file_name")
+    export = obs.get("export")
+    if isinstance(export, Mapping):
+        if file_name != expected_file_name(export):
+            problems.append(f"file_name {file_name!r}, expected {expected_file_name(export)!r}")
+    else:
+        notes.append("The file name was not compared: the print page gave no export data")
+    if problems:
+        return Result(name, FAIL, "; ".join(problems) + f" ({_timeline(server)})", notes)
+    size = f"{(got.get('bytes') or 0) / 1024:.0f} kB"
+    return Result(name, PASS, f"{_timeline(server)}; {got.get('pages')} pages, {size}; {file_name!r}", notes)
+
+
+def outline(export: Mapping[str, object]) -> list[str]:
+    """The export's section titles, headings and table titles, in print order."""
+    labels: list[str] = []
+    for section in export.get("sections") or []:  # type: ignore[union-attr]
+        labels.append(str(norm(section.get("title") or "")))
+        for block in section.get("blocks") or []:
+            if block.get("kind") == "heading":
+                labels.append(str(norm(block.get("text") or "")))
+            elif block.get("kind") == "table":
+                labels.append(str(norm(block.get("title") or "")))
+    return [label for label in labels if label]
+
+
+def in_order(text: str, labels: Sequence[str]) -> list[str]:
+    """The labels found in the text one after another. Line and page breaks are spaces, and case
+    is ignored (headings print in capitals), so different page breaks don't matter."""
+    flat = " ".join(text.split()).casefold()
+    found, at = [], 0
+    for label in labels:
+        where = flat.find(label.casefold(), at)
+        if where >= 0:
+            found.append(label)
+            at = where + len(label.casefold())
+    return found
+
+
+def check_pdf_server_text(obs: Mapping[str, object]) -> Result:
+    """The server PDF has the browser-print PDF's section headings and table titles, in its order."""
+    name = "pdf-server-text"
+    server = obs.get("server_pdf")
+    if not isinstance(server, Mapping) or not isinstance(server.get("download"), Mapping) or "text" not in server:
+        return Result(name, SKIP, "No server PDF to compare")
+    export, browser, made = obs.get("export"), obs.get("pdf_text"), server.get("text")
+    if not isinstance(export, Mapping):
+        return Result(name, SKIP, "No export data to take headings and table titles from")
+    if not isinstance(browser, str) or not isinstance(made, str):
+        return Result(name, SKIP, "No PDF text: pdftotext (poppler) is not installed")
+    labels = outline(export)
+    if not labels:
+        return Result(name, SKIP, "The export has no section headings or table titles")
+    want, got = in_order(browser, labels), in_order(made, labels)
+    pages = f"browser A4 {((obs.get('pdf') or {}).get('A4') or {}).get('pages')} pages, server {(server.get('download') or {}).get('pages')}"  # type: ignore[union-attr]
+    notes = []
+    if len(want) < len(labels):
+        notes.append(f"{len(labels) - len(want)} of {len(labels)} headings and titles aren't in order in the browser-print PDF either")
+    if got == want:
+        return Result(name, PASS, f"{len(want)} section headings and table titles in the browser-print PDF's order ({pages})", notes)
+    first = next(i for i in range(max(len(want), len(got))) if i >= len(got) or i >= len(want) or want[i] != got[i])
+    missing = [label for label in want if label not in got]
+    detail = f"first difference at #{first + 1}: browser {want[first] if first < len(want) else None!r}, server {got[first] if first < len(got) else None!r}"
+    if missing:
+        detail += f"; not in order in the server PDF: {missing[:4]}"
+    return Result(name, FAIL, f"{detail} ({pages})", notes)
+
+
+def check_pdf_server_cancel(obs: Mapping[str, object]) -> Result:
+    """DELETE on a queued export answers 204, and the export then reads `cancelled`."""
+    name = "pdf-server-cancel"
+    probe = obs.get("server_pdf_cancel") or {}
+    assert isinstance(probe, Mapping)
+    post = probe.get("post") or {}
+    assert isinstance(post, Mapping)
+    skipped = _not_live(post)
+    if skipped:
+        return Result(name, SKIP, skipped.detail)
+    if post.get("status") != 202:
+        return Result(name, FAIL, f"{_answer(post)}, expected 202")
+    deleted, after = probe.get("delete") or {}, probe.get("after") or {}
+    assert isinstance(deleted, Mapping) and isinstance(after, Mapping)
+    if deleted.get("status") != 204:
+        return Result(name, FAIL, f"DELETE answered {deleted.get('status') or deleted.get('error')} {deleted.get('message')!r}, expected 204")
+    if after.get("status") != 200 or after.get("state") != "cancelled":
+        return Result(name, FAIL, f"After DELETE, GET answered {after.get('status')} with state {after.get('state')!r}, expected 'cancelled'")
+    return Result(name, PASS, f"DELETE on a {probe.get('state_before')} export answered 204; it then reads 'cancelled'")
+
+
+def check_pdf_server_other_owner(obs: Mapping[str, object]) -> Result:
+    """Another owner reading this owner's export gets 404, as for an unknown ID."""
+    name = "pdf-server-other-owner"
+    probe = obs.get("server_pdf_other_owner") or {}
+    assert isinstance(probe, Mapping)
+    if not probe.get("second_identity"):
+        return Result(name, SKIP, "The suite signs in as one owner; another owner's read of an export isn't tried")
+    if not probe.get("export_id"):
+        return Result(name, SKIP, "No export was made to read as another owner")
+    got = probe.get("get") or {}
+    assert isinstance(got, Mapping)
+    if got.get("status") != 404:
+        return Result(name, FAIL, f"Another owner's GET answered {got.get('status') or got.get('error')}, expected 404")
+    return Result(name, PASS, "Another owner's GET answered 404")
+
+
+def check_pdf_server_ui(obs: Mapping[str, object]) -> Result:
+    """Export → PDF in the Terminal: "Preparing your PDF…", then the file downloads; or, where the
+    server export isn't live, the print layout opens in a new tab (a skip, not a failure)."""
+    name = "pdf-server-ui"
+    ui = obs.get("server_pdf_ui") or {}
+    assert isinstance(ui, Mapping)
+    if ui.get("error"):
+        return Result(name, FAIL, str(ui["error"]))
+    toasts = [t.get("text") for t in ui.get("toasts") or []]  # type: ignore[union-attr]
+    popup = ui.get("popup") or {}
+    assert isinstance(popup, Mapping)
+    expected = f"/print/studies/{ui.get('study_id')}"
+    printed = popup.get("path") == expected and popup.get("run") == ui.get("run_id")
+    if ui.get("build") == "print-link":
+        if not printed:
+            return Result(name, FAIL, f"Export → PDF opened {popup.get('path')!r}, not the run's print layout")
+        return Result(name, SKIP, f"{NOT_DEPLOYED}: this Terminal build has no server PDF; Export → PDF opens the print layout in a new tab")
+    problems = [] if PREPARING_TOAST in toasts else [f"no “{PREPARING_TOAST}” toast (saw {toasts})"]
+    post = {"status": ui.get("post_status"), "message": ui.get("post_message")}
+    if post["status"] == 202:
+        got = ui.get("download") or {}
+        assert isinstance(got, Mapping)
+        if not got:
+            problems.append(f"no download within {ui.get('waited_s')}s")
+        elif got.get("failure"):
+            problems.append(f"the download {got.get('suggested_filename')!r} failed: {got['failure']}")
+        elif not got.get("pdf_header"):
+            problems.append(f"the download {got.get('suggested_filename')!r} is not a PDF")
+        if problems:
+            return Result(name, FAIL, "; ".join(problems))
+        return Result(name, PASS, f"“{PREPARING_TOAST}”, then {got.get('suggested_filename')!r} downloaded ({got.get('bytes')} bytes, a PDF) after {got.get('at_s')}s")
+    skipped = _not_live(post)
+    fallback = (
+        server_unavailable(post["status"], post["message"])
+        or ("the run can't be exported on the server" if post["status"] == 422 else None)
+    )
+    if fallback and not printed:
+        problems.append(f"after {_answer(post)} the print layout didn't open (popup {popup.get('path')!r})")
+    if problems or not (skipped or fallback):
+        return Result(name, FAIL, "; ".join(problems) or f"{_answer(post)}, expected 202 or a fallback status")
+    if fallback:
+        return Result(name, SKIP, f"{fallback} ({_answer(post)}): “{PREPARING_TOAST}”, then the print layout opened in a new tab")
+    return Result(name, SKIP, f"{LIMIT_REACHED} ({_answer(post)})")
+
+
 def evaluate(
     obs: Mapping[str, object], fixture: Fixture, formats: Sequence[Format], run: Profile | None
 ) -> list[Result]:
@@ -783,6 +1057,18 @@ def evaluate(
             *([check_expectations(obs, fixture)] if fixture.expect.get("notices") or fixture.expect.get("sections_with_tables") else []),
             check_pdfs(obs),
         ]
+    # Server-made PDFs, in observations recorded since they were checked. The attempt-wide probes
+    # (cancel, another owner, the Terminal's Export → PDF) are on one fixture's observation.
+    if "server_pdf" in obs:
+        results.append(check_pdf_server(obs, empty))
+        if not empty:
+            results.append(check_pdf_server_text(obs))
+    if "server_pdf_cancel" in obs:
+        results.append(check_pdf_server_cancel(obs))
+    if "server_pdf_other_owner" in obs:
+        results.append(check_pdf_server_other_owner(obs))
+    if "server_pdf_ui" in obs:
+        results.append(check_pdf_server_ui(obs))
     results += [check_clean(obs), check_no_ai(obs)]
     return results
 

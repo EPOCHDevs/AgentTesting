@@ -19,12 +19,12 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import jwt
-from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Download, Page, Response, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from tools import local_auth
@@ -39,6 +39,28 @@ NO_DASHBOARD_NOTICE = "This run didn’t publish a dashboard."
 PAGE_CONTENT_WIDTH = {"A4": 680, "Letter": 703}
 # Starting an assistant run is a POST to a thread's runs (or a stateless run).
 AI_RUN = re.compile(r"/runs(/stream|/wait|/batch|/crons)?/?$")
+
+# Export → PDF made on the server (EpochClientPortal pdfExport): the route it starts, how long it
+# can take (the Terminal gives up after 2 minutes) and the toasts it shows, which can come and go
+# before a check could look, so a watcher records each the moment it's added.
+EXPORTS_PATH = "/api/v1/platform/exports"
+SERVER_EXPORT_WAIT_MS = 130_000
+FALLBACK_WAIT_MS = 15_000
+TOAST_WATCH = """() => {
+  const wanted = ["Preparing your PDF…", "Your PDF is ready.", "The export couldn’t be made. Try again.",
+                  "exports this hour", "Open the print layout to save your PDF"];
+  const seen = (window.__epochExportToasts = []);
+  const start = performance.now();
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) {
+      const text = node.textContent || "";
+      for (const want of wanted)
+        if (text.includes(want) && !seen.some((s) => s.text === want))
+          seen.push({ text: want, at_ms: Math.round(performance.now() - start) });
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}"""
+URL = re.compile(r"https?://\S+")
 
 # The page function; its leading comment lines are dropped so Playwright sees a function.
 DOM_SCRIPT = "\n".join(
@@ -197,6 +219,71 @@ class Terminal:
         }
         return observation
 
+    def export_pdf(self, run_id: str, study_id: str, out: Path) -> dict[str, object]:
+        """Export → PDF on the study page, as a reader clicks it (`checks.check_pdf_server_ui`).
+
+        A Terminal with server PDFs shows "Preparing your PDF…", starts the export and downloads
+        the file when it's ready; where the server refuses (404, 422, 503) it opens the print layout
+        in a new tab instead. An earlier build's PDF item is the print layout's link. The download's
+        signed address is never recorded.
+        """
+        observed: dict[str, object] = {"run_id": run_id, "study_id": study_id, "ai_runs": []}
+        context = self.context()
+        try:
+            page = context.new_page()
+            Recorder(page, self.stack, observed["ai_runs"])  # type: ignore[arg-type]
+            popups: list[Page] = []
+            downloads: list[Download] = []
+            # Playwright tags each listener, so they're functions, not a list's bound append.
+            page.on("popup", lambda popup: popups.append(popup))
+            page.on("download", lambda download: downloads.append(download))
+            page.goto(f"{self.ui_url}/studies/{study_id}?run={run_id}", wait_until="domcontentloaded", timeout=90_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=20_000)
+            except PlaywrightTimeout:
+                pass
+            trigger = page.locator('button[aria-haspopup="menu"]', has_text="Export")
+            try:
+                trigger.wait_for(state="visible", timeout=120_000)
+            except PlaywrightTimeout:
+                observed["error"] = "The study page showed no Export menu within 120s"
+                return observed
+            page.evaluate(TOAST_WATCH)
+            trigger.click()
+            menu = page.get_by_role("menu")
+            menu.wait_for(state="visible", timeout=15_000)
+            item = menu.get_by_role("menuitem").filter(has_text="PDF").first
+            observed["build"] = "print-link" if item.get_attribute("href") else "server"
+            started = time.monotonic()
+            if observed["build"] == "print-link":
+                with page.expect_popup(timeout=30_000) as opened:
+                    item.click()
+                observed["popup"] = _print_tab(opened.value)
+            else:
+                with page.expect_response(_starts_export, timeout=30_000) as created:
+                    item.click()
+                response = created.value
+                observed["post_status"] = response.status
+                observed["paper"] = (response.request.post_data_json or {}).get("paper")
+                if response.status >= 400:
+                    observed["post_message"] = _message(response)
+                if response.status == 202:
+                    download = _first(downloads, page.expect_download, SERVER_EXPORT_WAIT_MS)
+                    observed["waited_s"] = round(time.monotonic() - started, 1)
+                    if download is not None:
+                        observed["download"] = _keep(download, out / "server-ui.pdf", observed["waited_s"])
+                else:
+                    popup = _first(popups, page.expect_popup, FALLBACK_WAIT_MS)
+                    if popup is not None:
+                        observed["popup"] = _print_tab(popup)
+            page.wait_for_timeout(500)
+            observed["toasts"] = page.evaluate("window.__epochExportToasts || []")
+        except PlaywrightTimeout as error:
+            observed["error"] = withhold_urls(f"Timed out: {str(error).splitlines()[0][:300]}")
+        finally:
+            context.close()
+        return observed
+
     def _menu(self, page: Page, run_id: str, study_id: str, out: Path) -> dict[str, object]:
         url = f"{self.ui_url}/studies/{study_id}?run={run_id}"
         page.goto(url, wait_until="domcontentloaded", timeout=90_000)
@@ -308,6 +395,70 @@ class Terminal:
         found["pdf_text"] = pdf_text(out / "export-a4.pdf")
         (out / "export-data.json").write_text(json.dumps(found["export"], indent=1))
         return found
+
+
+def withhold_urls(text: str) -> str:
+    """Error text as evidence may keep it: an address can be a signed one."""
+    return URL.sub("[URL withheld]", text)
+
+
+def _starts_export(response: Response) -> bool:
+    return response.request.method == "POST" and urlsplit(response.url).path == EXPORTS_PATH
+
+
+def _message(response: Response) -> str | None:
+    """Platform's envelope message of a refusal."""
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 — a load balancer's page, or no body.
+        return None
+    message = body.get("message") if isinstance(body, dict) else None
+    return message if isinstance(message, str) else None
+
+
+def _first(collected: list, expect: Callable[..., object], timeout: float):  # noqa: ANN202
+    """The first event already collected by a listener, else the next one, within `timeout` ms.
+
+    The listener sees events that came before the wait began, as a fallback tab does: it opens
+    as soon as the refusal reaches the page.
+    """
+    if collected:
+        return collected[0]
+    try:
+        with expect(timeout=timeout) as info:  # type: ignore[operator]
+            pass
+        return info.value
+    except PlaywrightTimeout:
+        return collected[0] if collected else None
+
+
+def _keep(download: Download, path: Path, at_s: float) -> dict[str, object]:
+    """A downloaded file kept as evidence: its name, size and whether it is a PDF; not its address."""
+    failure = download.failure()
+    if failure:
+        return {"suggested_filename": download.suggested_filename, "failure": withhold_urls(failure), "at_s": at_s}
+    download.save_as(path)
+    data = path.read_bytes()
+    return {
+        "suggested_filename": download.suggested_filename,
+        "path": path.name,
+        "bytes": len(data),
+        "pdf_header": data[:5] == b"%PDF-",
+        "pages": pdf_pages(data),
+        "at_s": at_s,
+    }
+
+
+def _print_tab(popup: Page) -> dict[str, object]:
+    """Where a new tab went: its path and run, then it is closed."""
+    try:
+        popup.wait_for_load_state("domcontentloaded", timeout=30_000)
+    except PlaywrightTimeout:
+        pass
+    parts = urlsplit(popup.url)
+    found = {"path": parts.path, "run": (parse_qs(parts.query).get("run") or [None])[0]}
+    popup.close()
+    return found
 
 
 def pdf_text(pdf: Path) -> str | None:
