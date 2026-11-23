@@ -19,6 +19,7 @@ import httpx
 from dotenv import dotenv_values
 
 from tools.agent_testing import Stack, check_stack
+from tools.local_agent_processes import verify_local_agent_isolation
 from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -238,6 +239,7 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             flush=True,
         )
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
+    verify_local_agent_isolation(ai, (stack.backend_url,))
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
         if not os.access(executable, os.X_OK):
