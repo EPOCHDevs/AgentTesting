@@ -672,7 +672,8 @@ def test_ui_build_runtime_serves_one_bundle_per_commit_through_the_agent_proxy(
               "VITE_API_BASE_URL": stack.backend_url}
     builds = []
 
-    def build(command, cwd, env, stdout, stderr):
+    def build(command, cwd, env, stdout, stderr, timeout):
+        assert timeout == 180
         builds.append((command, env))
         out = Path(command[command.index("--outDir") + 1])
         out.mkdir(parents=True)
@@ -699,13 +700,14 @@ def test_ui_build_runtime_serves_one_bundle_per_commit_through_the_agent_proxy(
     # The same commit and configuration reuse the bundle.
     again = local_stack.prepare_ui_build(ui, "/bin/corepack", ui_env, stack, 3000, commit, state)
     assert again[1] == command and len(builds) == 1
-    # A changed env file is a different bundle, and the old one is removed.
+    # A changed env file is a different bundle. A running UI or rollback may
+    # still need the previous immutable generation, so building preserves it.
     (ui / ".env.local").write_text("VITE_SHOWCASE_MODE=1\n")
     changed = local_stack.prepare_ui_build(ui, "/bin/corepack", ui_env, stack, 3000, commit, state)
     assert len(builds) == 2 and changed[1] != command
-    assert [path.name for path in (state / "ui-builds").iterdir()] == [
-        Path(changed[1][changed[1].index("--outDir") + 1]).name
-    ]
+    assert {path.name for path in (state / "ui-builds").iterdir()} == {
+        bundle.name, Path(changed[1][changed[1].index("--outDir") + 1]).name
+    }
 
 
 def test_ui_build_failure_is_explicit(tmp_path, monkeypatch):

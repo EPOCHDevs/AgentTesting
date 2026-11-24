@@ -24,6 +24,7 @@ from dotenv import dotenv_values
 from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
 from tools.local_agent_processes import verify_local_agent_isolation
 from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
+from tools.local_ui_refresh import Controller, Preview, request_refresh
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Backend, AI and the Portal integrate on main; Epoch Platform integrates on dev.
@@ -501,6 +502,18 @@ def prepare_up(
 UI_ENV_FILES = (".env", ".env.local", ".env.production", ".env.production.local")
 
 
+def ui_build_configuration(ui: Path, ui_env: dict[str, str], stack: Stack) -> tuple[dict[str, str], str]:
+    origin = stack.ui_url.rstrip("/")
+    build_env = {**ui_env, "VITE_LANGGRAPH_API_URL": f"{origin}/lg-api"}
+    configuration = hashlib.sha256()
+    for key in sorted(k for k in build_env if k.startswith("VITE_")):
+        configuration.update(f"{key}={build_env[key]}\n".encode())
+    for name in UI_ENV_FILES:
+        if (ui / name).is_file():
+            configuration.update(name.encode() + b"\0" + (ui / name).read_bytes())
+    return build_env, configuration.hexdigest()
+
+
 def prepare_ui_build(
     ui: Path,
     corepack: str,
@@ -517,16 +530,9 @@ def prepare_ui_build(
     origin, so the bundle talks to it through the same /lg-api proxy the dev server uses;
     `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
     """
-    origin = stack.ui_url.rstrip("/")
-    build_env = {**ui_env, "VITE_LANGGRAPH_API_URL": f"{origin}/lg-api"}
-    configuration = hashlib.sha256()
-    for key in sorted(k for k in build_env if k.startswith("VITE_")):
-        configuration.update(f"{key}={build_env[key]}\n".encode())
-    for name in UI_ENV_FILES:
-        if (ui / name).is_file():
-            configuration.update(name.encode() + b"\0" + (ui / name).read_bytes())
+    build_env, configuration = ui_build_configuration(ui, ui_env, stack)
     builds = private_dir(state / "ui-builds")
-    bundle = builds / f"{commit[:12]}-{configuration.hexdigest()[:12]}"
+    bundle = builds / f"{commit[:12]}-{configuration[:12]}"
     if not (bundle / "index.html").is_file():
         partial = bundle.with_name(bundle.name + ".partial")
         shutil.rmtree(partial, ignore_errors=True)
@@ -535,26 +541,77 @@ def prepare_ui_build(
         with os.fdopen(
             os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
         ) as stream:
-            built = subprocess.run(
-                [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
-                 "--emptyOutDir"],
-                cwd=ui,
-                env=build_env,
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-            )
+            try:
+                built = subprocess.run(
+                    [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
+                     "--emptyOutDir"],
+                    cwd=ui, env=build_env, stdout=stream, stderr=subprocess.STDOUT, timeout=180,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise ValueError(f"The UI build timed out. Inspect {log}.") from error
         if built.returncode or not (partial / "index.html").is_file():
             raise ValueError(f"The UI build failed. Inspect {log}.")
         partial.rename(bundle)
-        # Older bundles are never served again.
-        for old in builds.iterdir():
-            if old != bundle:
-                shutil.rmtree(old, ignore_errors=True)
+        # A running preview or a failed replacement may still need an older
+        # immutable bundle. Building never deletes another generation.
     command = [
         corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(bundle),
         "--host", "127.0.0.1", "--port", str(port), "--strictPort",
     ]
     return ("UI", command, ui, ui_env, stack.ui_url)
+
+
+def start_preview(preview: Preview, log: Path) -> subprocess.Popen:
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        return subprocess.Popen(preview.command, cwd=preview.cwd, env=preview.env,
+                                stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def ui_preview_inputs(ui: Path) -> str:
+    """Pin the actual preview config/dependencies; rollback must load the same ones.
+
+    Epoch's current Vite config has package imports only. A changed config,
+    dependency manifest, tsconfig or dotenv file requires a reviewed bootstrap,
+    rather than claiming an old bundle alone restores its proxy behavior.
+    """
+    names = {*UI_ENV_FILES, "package.json", "pnpm-lock.yaml"}
+    names.update(path.name for pattern in ("vite.config.*", "tsconfig*.json") for path in ui.glob(pattern))
+    names.update("node_modules/" + package + "/package.json" for package in (
+        "vite", "@rolldown/plugin-babel", "@sentry/vite-plugin", "@tailwindcss/vite", "@vitejs/plugin-react"))
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        path = ui / name
+        digest.update(name.encode() + b"\0")
+        digest.update(path.read_bytes() if path.is_file() else b"<absent>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def ui_refresh_controller(state: Path, stack: Stack, service: tuple, child, children: list) -> Controller:
+    _name, command, ui, ui_env, url = service
+    source = json.loads((state / "source-checkouts.json").read_text())["EpochClientPortal"]
+    _env, configuration = ui_build_configuration(ui, ui_env, stack)
+    initial = Preview(command, ui, ui_env, url, source["commit"], configuration)
+    preview_inputs = ui_preview_inputs(ui)
+
+    def guard() -> None:
+        if ui_preview_inputs(ui) != preview_inputs:
+            raise ValueError("Portal preview configuration/dependencies changed; keep the old UI and use a reviewed bootstrap.")
+
+    def stage(commit: str, expected_configuration: str) -> Preview:
+        # Read-only preflight; refresh cannot switch repositories or select a
+        # worktree, and it cannot change another service's process/configuration.
+        actual = verify_primary_checkouts()["EpochClientPortal"]
+        if actual["path"] != str(ui) or actual["commit"] != commit:
+            raise ValueError("The primary Portal is not at the exact qualified target commit.")
+        _build_env, current_configuration = ui_build_configuration(ui, ui_env, stack)
+        if current_configuration != expected_configuration:
+            raise ValueError("The primary Portal configuration differs from the requested SHA256.")
+        prepared = prepare_ui_build(ui, command[0], ui_env, stack, urlsplit(url).port or 3000, commit, state)
+        guard()
+        return Preview(prepared[1], ui, ui_env, url, commit, current_configuration)
+
+    return Controller(state, initial, child, children, stage, start_preview, stop, guard=guard)
 
 
 def prepare_reference_files(binary: Path, commit: str, state: Path, base: dict[str, str]) -> Path:
@@ -1036,6 +1093,9 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("local-stack.toml"))
     parser.add_argument("--environments", type=Path, default=Path("environments.toml"))
     parser.add_argument("--email")
+    parser.add_argument("--refresh-ui", action="store_true", help="Ask a capable running launcher to refresh only Portal.")
+    parser.add_argument("--ui-commit", help="Exact qualified Portal commit for --refresh-ui.")
+    parser.add_argument("--ui-configuration", help="Exact Portal build configuration SHA256 for --refresh-ui.")
     parser.add_argument(
         "--login", action="store_true", help="Replace the cached local login"
     )
@@ -1055,7 +1115,21 @@ def main() -> None:
     )
     args = parser.parse_args()
     children = []
+    portal = None
     state = private_dir(Path(".artifacts/local-stack"))
+    if args.refresh_ui:
+        if not args.ui_commit or not args.ui_configuration:
+            parser.error("--refresh-ui requires --ui-commit and --ui-configuration.")
+        try:
+            result = request_refresh(state, args.ui_commit, args.ui_configuration)
+            print(json.dumps(result, indent=2))
+            if result["status"] not in ("ready", "unchanged"):
+                parser.exit(1, "Portal refresh failed; the saved result states rollback status.\n")
+        except (ValueError, OSError, KeyError) as error:
+            parser.exit(1, f"{error}\n")
+        return
+    if args.ui_commit or args.ui_configuration:
+        parser.error("UI target options require --refresh-ui.")
     with (state / "launcher.lock").open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1094,12 +1168,29 @@ def main() -> None:
             (state / "health.json").write_text(
                 json.dumps(receipt, indent=2, default=str)
             )
+            non_ui = list(children)
+            if args.ui_runtime == "build":
+                ui_index = next(i for i, service in enumerate(services) if service[0] == "UI")
+                ui_child = children[ui_index]
+                non_ui.remove(ui_child)
+                portal = ui_refresh_controller(state, stack, services[ui_index], ui_child, children)
             print(
                 f"Ready: {stack.ui_url}\nLocal CLI login is cached. Browser login uses the same account.\n"
                 "Ctrl+C stops these services. No research has been started.",
                 flush=True,
             )
-            while all(child.poll() is None for child in children):
+            last_ui_error = None
+            while all(child.poll() is None for child in non_ui):
+                if portal is not None:
+                    try:
+                        portal.tick()
+                        last_ui_error = None
+                    except (ValueError, OSError, RuntimeError, httpx.HTTPError) as error:
+                        # A UI/control-file failure is not permission to stop
+                        # Backend, AI, Platform or the front door.
+                        if str(error) != last_ui_error:
+                            print(f"Portal refresh needs attention: {error}", file=sys.stderr, flush=True)
+                        last_ui_error = str(error)
                 time.sleep(1)
             raise ValueError("A local service exited. Inspect the logs above.")
         except KeyboardInterrupt:
@@ -1107,6 +1198,8 @@ def main() -> None:
         except (ValueError, OSError, RuntimeError, httpx.HTTPError) as exc:
             parser.exit(1, f"{exc}\n")
         finally:
+            if portal is not None:
+                portal.close()
             stop(children)
             if args.ai_runtime == "up":
                 # Compose may leave the containers if `langgraph up` stopped early.

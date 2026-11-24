@@ -128,6 +128,31 @@ read-only at the same paths. Ctrl+C stops the services and runs
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
 
+For launchers started with the supervised Portal-refresh capability, a later
+qualified Portal code change can replace only the UI process:
+
+```bash
+.venv/bin/python -m tools.local_stack --refresh-ui \
+  --ui-commit <qualified-full-commit> --ui-configuration <current-configuration-sha256>
+```
+
+Read the current configuration hash and active bundle from
+`.artifacts/local-stack/ui-refresh-capability.json`. The primary Portal must be
+clean, on its expected branch, and at that exact qualified commit. The owner
+stages a separate immutable bundle and temporary loopback preview, checks the
+served index and module asset hashes, then replaces only its UI child. A bind or
+readiness failure rolls back to the retained bundle; Backend, AI, Platform and
+the front door are not restarted. A failed acknowledgement write cannot repeat
+the swap. If a command times out, reconcile the saved request/result instead of
+submitting another.
+
+An older already-running launcher needs **one coordinated restart** to enable
+this capability; changing its Python files does not enable it in the existing
+process. This first slice preserves the current proxy/configuration and pinned
+preview dependency inputs. Changes to those inputs need a reviewed bootstrap.
+Building never prunes an active or rollback bundle. The command sends no model,
+provider, study or account operations and does not reload a person's browser.
+
 Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
 **off by default**. The local stack uses the production vendor accounts, and
 automatic page refresh can spend the shared Barchart hourly quota that
