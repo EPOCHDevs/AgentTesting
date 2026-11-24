@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scope": "Deferred scenarios excluded from active campaigns.",
+  "scenarios": [
+    {
+      "id": "SW05",
+      "agent_id": "journey-swarm",
+      "status": "pending_issue",
+      "issue": "ENG-3174",
+      "path": "parent-comparison-dashboard.json"
+    }
+  ]
+}

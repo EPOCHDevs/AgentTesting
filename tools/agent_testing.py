@@ -646,6 +646,10 @@ class Conversation:
     ) -> dict[str, object]:
         """Collect independent deployed evidence sources; report every missing part."""
         with writer(self.folder):
+            from tools.collection_snapshots import snapshot_collection
+
+            # Preserve the previous reviewed view before status/trace refreshes.
+            snapshot_collection(self.folder)
             attempt = self.attempt()
             sources: dict[str, object] = {
                 "thread": {"status": "unavailable"},
@@ -824,6 +828,7 @@ class Conversation:
             from tools.evidence import render_report
 
             (self.folder / "report.md").write_text(render_report(self.folder))
+            snapshot = snapshot_collection(self.folder)
             return {
                 "environment": self.config.environment,
                 "status": status,
@@ -831,6 +836,7 @@ class Conversation:
                 "metrics": summary,
                 "sources": sources,
                 "evidence": str(self.folder),
+                "collection_snapshot": str(snapshot),
             }
 
 
@@ -1065,6 +1071,7 @@ def main() -> None:
             "environment": result["environment"],
             "capture_status": result["capture_status"],
             "evidence": result["evidence"],
+            "collection_snapshot": result["collection_snapshot"],
             "report": str(args.artifacts / args.attempt / "report.md"),
             "sources": {
                 name: {

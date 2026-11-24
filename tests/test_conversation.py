@@ -930,3 +930,48 @@ def test_up_agent_reports_the_backend_as_its_container_reaches_it(monkeypatch, r
     else:
         with pytest.raises(RuntimeError, match="different Backend"):
             asyncio.run(app.check_stack(up, "Bearer test-only"))
+
+
+def test_pull_retains_reviewed_versions_across_current_view_refresh(tmp_path, fake_health):
+    import hashlib
+    from pathlib import Path
+
+    server = Server()
+    exercise(tmp_path, server, ask)
+    first = exercise(tmp_path, server, lambda c: c.pull())
+    manifest = json.loads(Path(first['collection_snapshot']).read_text())
+    retained = manifest['files']['thread.json']
+    frozen = tmp_path / retained['object']
+    original = frozen.read_bytes()
+    assert hashlib.sha256(original).hexdigest() == retained['sha256']
+    server.state['values']['messages'] = [{'type': 'ai', 'content': 'A later observation'}]
+    second = exercise(tmp_path, server, lambda c: c.pull())
+    assert frozen.read_bytes() == original
+    assert (tmp_path / 'thread.json').read_bytes() != original
+    latest = json.loads(Path(second['collection_snapshot']).read_text())
+    assert latest['files']['thread.json']['sha256'] != retained['sha256']
+    assert Path(first['collection_snapshot']).read_text() == json.dumps(manifest, indent=2) + '\n'
+
+
+def test_snapshot_redacts_legacy_auth_without_scanning_financial_payloads(tmp_path):
+    from tools.collection_snapshots import snapshot_collection
+
+    payload = {'token': 23, 'authorization': 'financial data'}
+    app.save(tmp_path / 'turns/old/run.json', {
+        'kwargs': {'context': {'bearer_token': 'legacy-secret'}, 'input': payload},
+    })
+    app.save(tmp_path / 'traces/langsmith.json', {'runs': [{
+        'extra': {'metadata': {'Authorization': 'legacy-trace-secret'}}, 'inputs': payload,
+    }]})
+    manifest = json.loads(snapshot_collection(tmp_path).read_text())
+    for name in ['turns/old/run.json', 'traces/langsmith.json']:
+        entry = manifest['files'][name]
+        data = (tmp_path / entry['object']).read_text()
+        assert 'legacy-secret' not in data and 'legacy-trace-secret' not in data
+        assert entry['projection'] == 'canonical_auth_redacted'
+        assert 'financial data' in data
+    # Corrupt historical proof must fail closed, never overwrite it or collect.
+    entry = manifest['files']['turns/old/run.json']
+    (tmp_path / entry['object']).write_text('corrupted')
+    with pytest.raises(ValueError, match='Corrupt retained collection object'):
+        snapshot_collection(tmp_path)

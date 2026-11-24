@@ -1,5 +1,8 @@
 # AgentTesting
 
+**Current round:** [Fresh local scenarios](campaigns/product-local-20261123-round3/reports/dashboard.html) — [status table](campaigns/product-local-20261123-round3/reports/status.md). Previous rounds remain historical.
+
+
 A small workspace for testing research agents through realistic, multi-turn
 conversations and reviewing the evidence behind their results.
 
@@ -16,13 +19,11 @@ conversations and reviewing the evidence behind their results.
 
 Choose a scenario → have a conversation → collect evidence → review → record findings.
 
-Start with the [research situations](scenarios/README.md). The researcher reacts
-to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
-Plan campaign breadth and depth with the [workflow coverage programme](scenarios/coverage/README.md),
-including release prerequisites, meaningful variants and evidence requirements.
-Reviewers follow the [audit scope](AGENTS.md). Each attempt owns its records;
-a shared index can summarize them without competing
-writes. A completed conversation is not automatically a passing result.
+Use the [single campaign guide](scenarios/coverage/README.md) for the whole-product
+process, agent handoffs and dashboard. [catalog.json](scenarios/coverage/catalog.json)
+owns scenario definitions and criteria; campaign event logs own observations.
+The existing conversation runner below still collects evidence. A completed run
+is not automatically a passing journey.
 
 CLI, API and direct UI interaction are possible ways to drive a conversation.
 Notebooks are an optional way to run or review it.
@@ -93,6 +94,22 @@ Platform runs its general service in local mode (`EPOCH_FILES_LOCAL_ROOT`): no A
 account, with its objects and records in Backend's `personal_content` directory
 (`.artifacts/local-stack/backend/personal_content`), where the engine's local job
 store reads saved datasets, so a dataset saved locally is a local study input.
+The front door also sends engine reference and discovery routes to Platform. Reference files come
+from the primary engine's `epoch_reference_files` exporter, not another environment. Build that
+target once alongside the server; the launcher exports a fresh immutable generation before startup
+and Platform verifies its files against the exported manifest. New engine references require a stack
+restart. The launcher still does not compile C++ or install dependencies.
+Discovery optionally uses `EPOCH_DISCOVERY_GDS_URL` and `EPOCH_DISCOVERY_SERVICE_TOKEN`
+from the primary `EpochPlatform/.env.local`. Supply both to use the shared GDS catalogue;
+the launcher sends observation previews to the local engine and keeps selections on local disk.
+Other settings in that file are not inherited. Keep the file private and untracked.
+Asset metadata, logo selection and image routes also go to Platform. Configure
+`EPOCH_IDENTITY_GDS_URL` and `EPOCH_IDENTITY_GDS_TOKEN` together in the same private
+file to use GDS identity delivery. This credential is independent of discovery;
+it stays on Platform and is never passed to Backend, the agent or the browser.
+The launcher does not retrieve credentials or substitute external image URLs.
+Studio connections use the same Cognito Authorization header as ordinary local agent requests;
+the generated configuration requires custom authentication for Studio too.
 Files uploaded through Backend's former local Files are not carried over. The
 agent's Files workers use the front door with the shared worker token, which goes
 to Platform, not Backend.
@@ -127,6 +144,62 @@ read-only at the same paths. Ctrl+C stops the services and runs
 `local-stack.example.toml`. Remove old worktree paths from an existing local
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
+
+For launchers started with the supervised Portal-refresh capability, a later
+qualified Portal code change can replace only the UI process:
+
+```bash
+.venv/bin/python -m tools.local_stack --refresh-ui \
+  --ui-commit <qualified-full-commit> --ui-configuration <current-configuration-sha256>
+```
+
+Read the current configuration hash and active bundle from
+`.artifacts/local-stack/ui-refresh-capability.json`. The primary Portal must be
+clean, on its expected branch, and at that exact qualified commit. The owner
+stages a separate immutable bundle and temporary loopback preview, checks the
+served index and module asset hashes, revalidates the clean exact source before
+publishing a build and immediately before stopping the old UI, then replaces
+only its UI child. A build-time source drift leaves an unpublished partial, so
+an explicit restored-source retry rebuilds it. A bind or
+readiness failure rolls back to the retained bundle; Backend, AI, Platform and
+the front door are not restarted. A failed acknowledgement write cannot repeat
+the swap. If a command times out, reconcile the saved request/result instead of
+submitting another.
+
+An older already-running launcher needs **one coordinated restart** to enable
+this capability; changing its Python files does not enable it in the existing
+process. This first slice preserves the current proxy/configuration and pinned
+preview dependency inputs. Changes to those inputs need a reviewed bootstrap.
+Building never prunes an active or rollback bundle. The command sends no model,
+provider, study or account operations and does not reload a person's browser.
+
+An explicitly reviewed rollback may select previously qualified artifacts while
+the primary checkouts remain at their current qualified revisions:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up --ui-runtime build \
+  --retained-cut /absolute/path/manifest.json \
+  --retained-cut-admission /absolute/path/review.json \
+  --retained-cut-admission-sha <review-file-sha256>
+```
+
+This is a separate operator-selected mode, never an automatic fallback. The
+normal clean, current integration-branch checks still run. The manifest pins
+workspace revisions separately from the runtime revisions, the existing AI
+image's full immutable ID, the original managed UI bundle and every file hash,
+configuration/dependency inputs, primary Native binaries/reference, stack
+identity and the original runtime qualification receipt. The independent
+passing review binds the exact manifest hash. The files contain hashes and
+paths, not environment credentials. Missing or changed artifacts/configuration
+fail before service preparation; this mode never builds, pulls, resets source
+or relabels an old artifact as new source. Readiness verifies the selected AI
+source/reference and the served UI hashes. Its health receipt explicitly records
+the retained runtime and current workspace separately.
+
+Portal refresh is disabled in retained mode, and UI failure retains the original
+all-service shutdown behavior. Leaving this mode requires a separately reviewed
+normal bootstrap. A failed startup preflight never runs Compose cleanup against
+an already-running stack; cleanup belongs only to a launcher that started AI.
 
 Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
 **off by default**. The local stack uses the production vendor accounts, and
@@ -192,10 +265,10 @@ versions for each submission. Selecting a stack does not deploy a product branch
 ```bash
 # Supply EPOCH_TOKEN through your existing Epoch login; do not commit it.
 .venv/bin/python -m tools.agent_testing check
-.venv/bin/python -m tools.agent_testing ask industrial-01 --key opening --owner researcher-a \
-  --scenario industrial-resilience "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which business looks better able to withstand a slowdown in customer orders, and what makes you think so?"
-.venv/bin/python -m tools.agent_testing pull industrial-01 --follow
-.venv/bin/python -m tools.agent_testing status industrial-01
+.venv/bin/python -m tools.agent_testing ask conversation-01 --key opening --owner journey-chat \
+  --scenario CV01 "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which business looks better able to withstand a slowdown in customer orders, and what makes you think so?"
+.venv/bin/python -m tools.agent_testing pull conversation-01 --follow
+.venv/bin/python -m tools.agent_testing status conversation-01
 ```
 
 Read the returned answer before choosing a follow-up. Another `ask` with a new
@@ -210,7 +283,7 @@ data. Raw diagnostic artifacts remain private under `.artifacts/`.
 
 For a clarification, `status` shows the current interrupt IDs and payloads. Write
 a local JSON file mapping the selected IDs to their explicit response payloads,
-then use `answer industrial-01 --key clarification-1 --responses /path/to/answers.json`.
+then use `answer conversation-01 --key clarification-1 --responses /path/to/answers.json`.
 No option is selected automatically.
 
 `pull` saves the server conversation; `pull --follow` also captures a resumable

@@ -18,7 +18,7 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-# PLATFORM_FILES_PATHS and PLATFORM_FILES_WORKER_PATHS, and Platform's general health.
+# Platform's public/reference/discovery/asset-identity paths and Files workers.
 PLATFORM_PATHS = (
     "/api/v1/files*",
     "/api/v1/space*",
@@ -26,6 +26,24 @@ PLATFORM_PATHS = (
     "/internal/dataset-preparations/*",
     "/internal/web-research/*",
     "/api/v1/platform/*",
+    "/api/v1/docs/grammar",
+    "/api/v1/enums",
+    "/api/v1/enums/*",
+    "/api/v1/schemas",
+    "/api/v1/schemas/*",
+    "/api/v1/skills/packages",
+    "/api/v1/skills/packages/*",
+    "/api/v1/agents/reference-library",
+    "/api/v1/agents/permissions",
+    "/api/v1/metadata/transforms",
+    "/api/v1/discovery/*",
+    "/api/v1/metadata/assets",
+    "/api/v1/metadata/assets/*",
+    "/api/v1/metadata/countries",
+    "/api/v1/metadata/countries/*",
+    "/api/v1/metadata/regions/*",
+    "/api/v1/assets/*/logos",
+    "/api/v1/images/*",
 )
 HEAD_LIMIT = 64 * 1024
 

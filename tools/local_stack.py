@@ -2,10 +2,12 @@
 
 import argparse
 import asyncio
+from collections.abc import Callable
 import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -22,7 +24,12 @@ import httpx
 from dotenv import dotenv_values
 
 from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
+from tools.local_agent_processes import verify_local_agent_isolation
 from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
+from tools.local_retained_cut import RetainedCut
+from tools.local_ui_refresh import (
+    CAPABILITY, Controller, Preview, clear_capability, probe, process_start, request_refresh, write_json,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Backend, AI and the Portal integrate on main; Epoch Platform integrates on dev.
@@ -105,25 +112,33 @@ def configure_market_pages(
         for plugin in document.get("plugins", [])
         if plugin.get("name") == "epoch_stratifyx::server::MiPageRuntimeService"
     ]
-    if len(plugins) != 1:
+    if not plugins and enabled:
+        raise ValueError(
+            "This Backend no longer hosts Markets page refresh. "
+            "Keep market_pages=false; page production is owned by Epoch Platform."
+        )
+    if len(plugins) > 1:
         raise ValueError(
             "The primary Backend runtime must have exactly one MiPageRuntimeService."
         )
-    options = plugins[0].setdefault("config", {})
-    if not isinstance(options, dict):
-        raise ValueError("The Backend MI configuration must be an object.")
-    calendar = options.setdefault("calendar", {})
-    if not isinstance(calendar, dict):
-        raise ValueError("The Backend Calendar configuration must be an object.")
-    calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
-    fd, temporary = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(document, stream, indent=2)
-            stream.write("\n")
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    # ENG-2946 retired this plugin. Disabled refresh needs no replacement plugin
+    # or runtime edit; older Backend versions still receive their explicit pause.
+    if plugins:
+        options = plugins[0].setdefault("config", {})
+        if not isinstance(options, dict):
+            raise ValueError("The Backend MI configuration must be an object.")
+        calendar = options.setdefault("calendar", {})
+        if not isinstance(calendar, dict):
+            raise ValueError("The Backend Calendar configuration must be an object.")
+        calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
+        fd, temporary = tempfile.mkstemp(dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump(document, stream, indent=2)
+                stream.write("\n")
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
     flag = "1" if enabled else "0"
     batch = (
         # Every deployed environment uses 128 (epoch-terraform #146). The
@@ -388,8 +403,24 @@ def up_compose_override(
             "    volumes:",
             f'      - "{RELAY}:{RELAY}:ro"',
             "    restart: unless-stopped",
+            "    healthcheck:",
+            "      test: " + json.dumps(["CMD", "python", "-c", relay_health_probe(relay_port)]),
+            "      interval: 30s",
+            "      timeout: 5s",
+            "      retries: 3",
+            "      start_period: 5s",
         ]
     return "\n".join(lines) + "\n"
+
+
+def relay_health_probe(port: int) -> str:
+    """Probe the forwarded Backend, rather than the inherited API/Redis check."""
+    return (
+        "import http.client; "
+        f"c=http.client.HTTPConnection('127.0.0.1',{port},timeout=3); "
+        "c.request('GET','/health'); r=c.getresponse(); "
+        "raise SystemExit(0 if r.status==200 else 1)"
+    )
 
 
 def exclude_locally(repo: Path, names: tuple[str, ...]) -> None:
@@ -422,14 +453,23 @@ def prepare_up(
     commit: str,
     state: Path,
     base: dict[str, str],
+    *,
+    retained_image_id: str | None = None,
 ) -> tuple:
     if not shutil.which("docker", path=base.get("PATH")):
         raise ValueError("The up runtime needs Docker on PATH.")
+    image = retained_image_id or f"epoch-ai-up:{commit[:12]}"
+    if retained_image_id is not None:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", retained_image_id):
+            raise ValueError("Retained images require their immutable full ID.")
+        found = subprocess.run(["docker", "image", "inspect", retained_image_id, "--format", "{{.Id}}"],
+                               env=base, capture_output=True, text=True)
+        if found.returncode or found.stdout.strip() != retained_image_id:
+            raise ValueError("The exact retained image is missing; no build or pull is allowed.")
     env, mounts, writable = up_container_env(values)
     graph_config = json.loads((ai / "langgraph.json").read_text())
     graph_config["env"] = UP_ENV
     # One image per EpochAI commit; the default builder avoids a stale buildx one.
-    image = f"epoch-ai-up:{commit[:12]}"
     write_private(ai / UP_ENV, env_file_text(env))
     write_private(ai / UP_CONFIG, json.dumps(graph_config, indent=2))
     write_private(
@@ -438,7 +478,7 @@ def prepare_up(
     )
     exclude_locally(ai, (UP_CONFIG, UP_ENV, UP_COMPOSE))
     up_env = {**base, "BUILDX_BUILDER": "default"}
-    if subprocess.run(
+    if retained_image_id is None and subprocess.run(
         ["docker", "image", "inspect", image], env=up_env, capture_output=True
     ).returncode:
         log = state / "ai-build.log"
@@ -476,22 +516,7 @@ def prepare_up(
 UI_ENV_FILES = (".env", ".env.local", ".env.production", ".env.production.local")
 
 
-def prepare_ui_build(
-    ui: Path,
-    corepack: str,
-    ui_env: dict[str, str],
-    stack: Stack,
-    port: int,
-    commit: str,
-    state: Path,
-) -> tuple:
-    """The Portal's production bundle, served by `vite preview`, as a deployment serves it.
-
-    One bundle per EpochClientPortal commit and configuration, kept between restarts, as the
-    agent keeps one image per EpochAI commit. The agent's CORS list does not include this
-    origin, so the bundle talks to it through the same /lg-api proxy the dev server uses;
-    `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
-    """
+def ui_build_configuration(ui: Path, ui_env: dict[str, str], stack: Stack) -> tuple[dict[str, str], str]:
     origin = stack.ui_url.rstrip("/")
     build_env = {**ui_env, "VITE_LANGGRAPH_API_URL": f"{origin}/lg-api"}
     configuration = hashlib.sha256()
@@ -500,8 +525,32 @@ def prepare_ui_build(
     for name in UI_ENV_FILES:
         if (ui / name).is_file():
             configuration.update(name.encode() + b"\0" + (ui / name).read_bytes())
+    return build_env, configuration.hexdigest()
+
+
+def prepare_ui_build(
+    ui: Path,
+    corepack: str,
+    ui_env: dict[str, str],
+    stack: Stack,
+    port: int,
+    commit: str,
+    state: Path,
+    *,
+    source_guard: Callable[[], None] | None = None,
+) -> tuple:
+    """The Portal's production bundle, served by `vite preview`, as a deployment serves it.
+
+    One bundle per EpochClientPortal commit and configuration, kept between restarts, as the
+    agent keeps one image per EpochAI commit. The agent's CORS list does not include this
+    origin, so the bundle talks to it through the same /lg-api proxy the dev server uses;
+    `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
+    """
+    build_env, configuration = ui_build_configuration(ui, ui_env, stack)
+    if source_guard is not None:
+        source_guard()
     builds = private_dir(state / "ui-builds")
-    bundle = builds / f"{commit[:12]}-{configuration.hexdigest()[:12]}"
+    bundle = builds / f"{commit[:12]}-{configuration[:12]}"
     if not (bundle / "index.html").is_file():
         partial = bundle.with_name(bundle.name + ".partial")
         shutil.rmtree(partial, ignore_errors=True)
@@ -510,26 +559,120 @@ def prepare_ui_build(
         with os.fdopen(
             os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
         ) as stream:
-            built = subprocess.run(
-                [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
-                 "--emptyOutDir"],
-                cwd=ui,
-                env=build_env,
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-            )
+            try:
+                built = subprocess.run(
+                    [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
+                     "--emptyOutDir"],
+                    cwd=ui, env=build_env, stdout=stream, stderr=subprocess.STDOUT, timeout=180,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise ValueError(f"The UI build timed out. Inspect {log}.") from error
         if built.returncode or not (partial / "index.html").is_file():
             raise ValueError(f"The UI build failed. Inspect {log}.")
+        if source_guard is not None:
+            source_guard()
         partial.rename(bundle)
-        # Older bundles are never served again.
-        for old in builds.iterdir():
-            if old != bundle:
-                shutil.rmtree(old, ignore_errors=True)
+        # A running preview or a failed replacement may still need an older
+        # immutable bundle. Building never deletes another generation.
     command = [
         corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(bundle),
         "--host", "127.0.0.1", "--port", str(port), "--strictPort",
     ]
+    if source_guard is not None:
+        source_guard()
     return ("UI", command, ui, ui_env, stack.ui_url)
+
+
+def start_preview(preview: Preview, log: Path) -> subprocess.Popen:
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        return subprocess.Popen(preview.command, cwd=preview.cwd, env=preview.env,
+                                stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def ui_preview_inputs(ui: Path) -> str:
+    """Pin the actual preview config/dependencies; rollback must load the same ones.
+
+    Epoch's current Vite config has package imports only. A changed config,
+    dependency manifest, tsconfig or dotenv file requires a reviewed bootstrap,
+    rather than claiming an old bundle alone restores its proxy behavior.
+    """
+    names = {*UI_ENV_FILES, "package.json", "pnpm-lock.yaml"}
+    names.update(path.name for pattern in ("vite.config.*", "tsconfig*.json") for path in ui.glob(pattern))
+    names.update("node_modules/" + package + "/package.json" for package in (
+        "vite", "@rolldown/plugin-babel", "@sentry/vite-plugin", "@tailwindcss/vite", "@vitejs/plugin-react"))
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        path = ui / name
+        digest.update(name.encode() + b"\0")
+        digest.update(path.read_bytes() if path.is_file() else b"<absent>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def require_primary_ui_source(ui: Path, commit: str) -> None:
+    actual = verify_primary_checkouts()["EpochClientPortal"]
+    if actual["path"] != str(ui) or actual["commit"] != commit:
+        raise ValueError("The primary Portal is not at the exact qualified target commit.")
+
+
+def ui_refresh_controller(state: Path, stack: Stack, service: tuple, child, children: list) -> Controller:
+    _name, command, ui, ui_env, url = service
+    source = json.loads((state / "source-checkouts.json").read_text())["EpochClientPortal"]
+    _env, configuration = ui_build_configuration(ui, ui_env, stack)
+    initial = Preview(command, ui, ui_env, url, source["commit"], configuration)
+    preview_inputs = ui_preview_inputs(ui)
+
+    def guard() -> None:
+        if ui_preview_inputs(ui) != preview_inputs:
+            raise ValueError("Portal preview configuration/dependencies changed; keep the old UI and use a reviewed bootstrap.")
+
+    def target_guard(commit: str) -> None:
+        require_primary_ui_source(ui, commit)
+        guard()
+
+    def stage(commit: str, expected_configuration: str) -> Preview:
+        # Read-only preflight; refresh cannot switch repositories or select a
+        # worktree, and it cannot change another service's process/configuration.
+        def source_guard() -> None:
+            target_guard(commit)
+
+        source_guard()
+        _build_env, current_configuration = ui_build_configuration(ui, ui_env, stack)
+        if current_configuration != expected_configuration:
+            raise ValueError("The primary Portal configuration differs from the requested SHA256.")
+        prepared = prepare_ui_build(ui, command[0], ui_env, stack, urlsplit(url).port or 3000,
+                                    commit, state, source_guard=source_guard)
+        source_guard()
+        guard()
+        return Preview(prepared[1], ui, ui_env, url, commit, current_configuration)
+
+    return Controller(state, initial, child, children, stage, start_preview, stop,
+                      guard=guard, target_guard=target_guard)
+
+
+def prepare_reference_files(binary: Path, commit: str, state: Path, base: dict[str, str]) -> Path:
+    """Export the actual local engine's reference generation; never borrow hosted metadata."""
+    exporter = binary.with_name("epoch_reference_files")
+    if not os.access(exporter, os.X_OK):
+        raise ValueError(
+            f"Missing {exporter}. Build the epoch_reference_files target in the primary Backend first."
+        )
+    generation = Path(tempfile.mkdtemp(prefix="reference-files-", dir=state))
+    log = state / "reference-export.log"
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        result = subprocess.run(
+            [str(exporter), "--output", str(generation), "--release", "local", "--git-sha", commit],
+            cwd=binary.parent, env=base, stdout=stream, stderr=subprocess.STDOUT,
+        )
+    if result.returncode:
+        raise ValueError(f"The local engine reference export failed. Inspect {log}.")
+    manifest = json.loads((generation / "manifest.json").read_text())
+    reference = json.loads((generation / "agents/reference-library.json").read_text())
+    if (manifest.get("format") != "epoch-reference-files-v1"
+            or manifest.get("engine", {}).get("git_sha") != commit
+            or not manifest.get("version") or reference.get("version") != manifest["version"]):
+        raise ValueError("The local engine exported an inconsistent reference generation.")
+    return generation
 
 
 def prepare_platform(
@@ -541,6 +684,7 @@ def prepare_platform(
     project: Path,
     commit: str,
     state: Path,
+    reference_root: Path,
 ) -> tuple:
     """Epoch Platform's general service, with Files and Space on local disk and no AWS account.
 
@@ -570,8 +714,34 @@ def prepare_platform(
         "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
         "EPOCH_FILES_LOCAL_ROOT": str(project / "personal_content"),
         "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
+        "EPOCH_REFERENCE_LOCAL_ROOT": str(reference_root),
         **files_access,
     })
+    # GDS is a shared catalogue service in deployed stacks too. Read only its
+    # explicit connection settings; local Files and observation reads stay local.
+    settings = platform / ".env.local"
+    connection = read_env(settings) if settings.is_file() else {}
+    discovery_url = connection.get("EPOCH_DISCOVERY_GDS_URL", "").strip()
+    discovery_token = connection.get("EPOCH_DISCOVERY_SERVICE_TOKEN", "").strip()
+    if bool(discovery_url) != bool(discovery_token):
+        raise ValueError("Platform .env.local needs both discovery GDS URL and service token.")
+    if discovery_url:
+        env.update({
+            "EPOCH_DISCOVERY_GDS_URL": discovery_url,
+            "EPOCH_DISCOVERY_SERVICE_TOKEN": discovery_token,
+            "EPOCH_DISCOVERY_NATIVE_URL": f"http://127.0.0.1:{BACKEND_PORT}",
+        })
+    # Identity has its own GDS credential; discovery configuration is not an
+    # identity grant, and neither credential reaches Backend, AI or the browser.
+    identity_url = connection.get("EPOCH_IDENTITY_GDS_URL", "").strip()
+    identity_token = connection.get("EPOCH_IDENTITY_GDS_TOKEN", "").strip()
+    if bool(identity_url) != bool(identity_token):
+        raise ValueError("Platform .env.local needs both identity GDS URL and service token.")
+    if identity_url:
+        env.update({
+            "EPOCH_IDENTITY_GDS_URL": identity_url,
+            "EPOCH_IDENTITY_GDS_TOKEN": identity_token,
+        })
     issuer = backend_values.get("EPOCH_TOKEN_ISSUER", "").strip()
     if issuer:
         # Delegated tokens from the local v1 host, which the local Backend signs.
@@ -639,15 +809,23 @@ def prepare(
     state: Path,
     ai_runtime: str = "dev",
     ui_runtime: str = "dev",
+    retained_cut: RetainedCut | None = None,
 ) -> list[tuple]:
     config, paths = primary_paths(config_file)
     revisions = verify_primary_checkouts()
+    if retained_cut is not None and (ai_runtime != "up" or ui_runtime != "build"):
+        raise ValueError("Retained rollback requires the local-up image and production UI bundle modes.")
     for name, revision in revisions.items():
         print(
             f"{name}: {revision['branch']} @ {revision['commit'][:10]} ({revision['path']})",
             flush=True,
         )
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
+    verify_local_agent_isolation(
+        ai,
+        (stack.backend_url, f"http://127.0.0.1:{BACKEND_PORT}", f"http://127.0.0.1:{PLATFORM_PORT}"),
+    )
+    runtime_ai_source = retained_cut.runtime_sources["EpochAI"] if retained_cut else revisions["EpochAI"]["commit"]
     platform = paths["platform_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
@@ -692,6 +870,12 @@ def prepare(
     if not corepack or not node:
         raise ValueError("Node 24+ and Corepack must be on PATH (or set node_bin).")
     base["COREPACK_ENABLE_NETWORK"] = "0"
+    ui_env = portal_environment(base, stack)
+    if retained_cut is not None:
+        retained_cut.validate(root=PROJECT_ROOT, state=state, paths=paths, workspace=revisions,
+                              identity=stack.identity(), environment=stack.environment,
+                              ui_configuration=ui_build_configuration(paths["ui_dir"], ui_env, stack)[1],
+                              preview_inputs=ui_preview_inputs(paths["ui_dir"]))
     if (
         int(
             subprocess.check_output([node, "--version"], env=base, text=True)
@@ -712,6 +896,7 @@ def prepare(
         "AWS_EC2_METADATA_DISABLED": "true",
         "EPOCH_CAMPAIGN_SERVER": stack.backend_url,
         "EPOCH_BACKEND_URL": stack.backend_url,
+        "EPOCH_PLATFORM_SERVER": stack.backend_url,
         "EPOCH_AI_URL": stack.ai_url,
         "LANGGRAPH_API_URL": stack.ai_url,
         "COGNITO_REGION": REGION,
@@ -725,6 +910,7 @@ def prepare(
         **base,
         **backend_values,
         **common,
+        "EPOCH_GIT_SHA": revisions["EpochBackend"]["commit"],
         "PORT": str(BACKEND_PORT),
         "EPOCH_SKIP_LOAD_JOBS": "0",
         "EPOCH_PROJECT_DIR": str(private_dir(state / "backend")),
@@ -741,15 +927,30 @@ def prepare(
     # LangGraph loads its config env after process env. Supply local overrides
     # inside a private generated config, leaving the product's files untouched.
     graph_config = json.loads((ai / "langgraph.json").read_text())
+    if graph_config.get("auth", {}).get("path"):
+        # Studio must authenticate as the actual Cognito caller, not a workspace
+        # StudioUser that cannot pass Epoch's per-owner thread authorization.
+        graph_config["auth"]["disable_studio_auth"] = True
     env_source = graph_config.get("env", {})
     ai_values = read_env(ai / env_source) if isinstance(env_source, str) else env_source
+    # Local-only credentials and provider choices override the graph's base env.
+    # Keep them server-side; UI and Backend environments are built separately.
+    if (ai / ".env.local").is_file():
+        ai_values = {**ai_values, **read_env(ai / ".env.local")}
     # A local launch is a versioned deployment too. Keep operator overrides;
     # otherwise identify it by the clean, verified AI source actually launched.
     revision = ai_values.get("EPOCH_COMMENTARY_DEPLOYMENT_REVISION", "").strip()
     if not revision:
-        revision = "local-" + revisions["EpochAI"]["commit"]
-    ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
-    revisions["EpochAI"]["commentary_deployment_revision"] = revision
+        revision = "local-" + runtime_ai_source
+    ai_values = {
+        **ai_values,
+        "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision,
+        # Saved cloud metadata in a local .env does not identify this process.
+        "LANGSMITH_LANGGRAPH_GIT_REF": revisions["EpochAI"]["branch"],
+        "LANGSMITH_LANGGRAPH_GIT_REF_SHA": runtime_ai_source,
+    }
+    if retained_cut is None:
+        revisions["EpochAI"]["commentary_deployment_revision"] = revision
     files_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
     ai_values = {**ai_values, **document_access(config.get("documents", {}))}
     check_document_access(ai_values, base)
@@ -760,9 +961,14 @@ def prepare(
         + ("on" if ai_values.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") == "true" else "off"),
         flush=True,
     )
+    reference_root = prepare_reference_files(binary, revisions["EpochBackend"]["commit"], state, base)
+    if retained_cut is not None:
+        reference = json.loads((reference_root / "manifest.json").read_text())
+        if reference.get("version") != retained_cut.native_reference_version:
+            raise ValueError("The primary reference export differs from the retained cut.")
     platform_service = prepare_platform(
         platform, node, base, backend_values, files_access,
-        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state,
+        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state, reference_root,
     )
     print(
         "Files and Space: Epoch Platform, on local disk in "
@@ -802,14 +1008,6 @@ def prepare(
     ) as f:
         json.dump(graph_config, f)
     ai_env["PYTHONPATH"] = str(ai)
-    ui_env = {
-        **base,
-        "VITE_API_BASE_URL": stack.backend_url,
-        "VITE_LANGGRAPH_API_URL": stack.ai_url,
-        "VITE_LANGGRAPH_ASSISTANT_ID": stack.assistant_id,
-        "VITE_COGNITO_USER_POOL_ID": POOL,
-        "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT,
-    }
     ai_service = (
         prepare_up(
             ai,
@@ -817,9 +1015,10 @@ def prepare(
             {**ai_values, **common},
             stack,
             ports[1],
-            revisions["EpochAI"]["commit"],
+            runtime_ai_source,
             state,
             base,
+            **({"retained_image_id": retained_cut.ai_image_id} if retained_cut else {}),
         )
         if ai_runtime == "up"
         else (
@@ -858,9 +1057,13 @@ def prepare(
             stack.backend_url + "/api/v1/platform/health",
         ),
         ai_service,
-        prepare_ui_build(
+        ("UI", [corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(retained_cut.ui_bundle),
+                "--host", "127.0.0.1", "--port", str(ports[2]), "--strictPort"],
+         ui, ui_env, stack.ui_url)
+        if retained_cut is not None else prepare_ui_build(
             ui, corepack, ui_env, stack, ports[2],
             revisions["EpochClientPortal"]["commit"], state,
+            source_guard=lambda: require_primary_ui_source(ui, revisions["EpochClientPortal"]["commit"]),
         )
         if ui_runtime == "build"
         else (
@@ -881,6 +1084,12 @@ def prepare(
             stack.ui_url,
         ),
     ]
+
+
+def portal_environment(base: dict[str, str], stack: Stack) -> dict[str, str]:
+    return {**base, "VITE_API_BASE_URL": stack.backend_url,
+            "VITE_LANGGRAPH_API_URL": stack.ai_url, "VITE_LANGGRAPH_ASSISTANT_ID": stack.assistant_id,
+            "VITE_COGNITO_USER_POOL_ID": POOL, "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT}
 
 
 def wait_ready(url: str, children: list, timeout: float) -> None:
@@ -938,6 +1147,12 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("local-stack.toml"))
     parser.add_argument("--environments", type=Path, default=Path("environments.toml"))
     parser.add_argument("--email")
+    parser.add_argument("--refresh-ui", action="store_true", help="Ask a capable running launcher to refresh only Portal.")
+    parser.add_argument("--ui-commit", help="Exact qualified Portal commit for --refresh-ui.")
+    parser.add_argument("--ui-configuration", help="Exact Portal build configuration SHA256 for --refresh-ui.")
+    parser.add_argument("--retained-cut", type=Path, help="Explicit reviewed rollback manifest; workspace checks stay strict.")
+    parser.add_argument("--retained-cut-admission", type=Path)
+    parser.add_argument("--retained-cut-admission-sha")
     parser.add_argument(
         "--login", action="store_true", help="Replace the cached local login"
     )
@@ -957,7 +1172,34 @@ def main() -> None:
     )
     args = parser.parse_args()
     children = []
+    portal = None
+    up_started = False
     state = private_dir(Path(".artifacts/local-stack"))
+    retained = None
+    if args.retained_cut or args.retained_cut_admission or args.retained_cut_admission_sha:
+        if (not all((args.retained_cut, args.retained_cut_admission, args.retained_cut_admission_sha))
+                or args.refresh_ui or args.ai_runtime != "up" or args.ui_runtime != "build"):
+            parser.error("Retained rollback needs manifest/admission/SHA, --ai-runtime up and --ui-runtime build; no --refresh-ui.")
+        if (args.config.resolve() != PROJECT_ROOT / "AgentTesting/local-stack.toml"
+                or args.environments.resolve() != PROJECT_ROOT / "AgentTesting/environments.toml"):
+            parser.error("Retained rollback requires the pinned primary launcher configuration paths.")
+        try:
+            retained = RetainedCut.load(args.retained_cut, args.retained_cut_admission, args.retained_cut_admission_sha)
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            parser.exit(1, f"{error}\n")
+    if args.refresh_ui:
+        if not args.ui_commit or not args.ui_configuration:
+            parser.error("--refresh-ui requires --ui-commit and --ui-configuration.")
+        try:
+            result = request_refresh(state, args.ui_commit, args.ui_configuration)
+            print(json.dumps(result, indent=2))
+            if result["status"] not in ("ready", "unchanged"):
+                parser.exit(1, "Portal refresh failed; the saved result states rollback status.\n")
+        except (ValueError, OSError, KeyError) as error:
+            parser.exit(1, f"{error}\n")
+        return
+    if args.ui_commit or args.ui_configuration:
+        parser.error("UI target options require --refresh-ui.")
     with (state / "launcher.lock").open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -968,7 +1210,8 @@ def main() -> None:
                 args.environments, "local-up" if args.ai_runtime == "up" else "local"
             )
             check_ports(service_ports(stack))
-            services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime)
+            services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime,
+                               **({"retained_cut": retained} if retained else {}))
             bearer = (
                 login(args.email)
                 if args.login or not token_path().exists()
@@ -988,20 +1231,55 @@ def main() -> None:
                         start_new_session=True,
                     )
                 children.append(child)
+                if name == "AI" and args.ai_runtime == "up":
+                    up_started = True
                 print(f"Starting {name}; log: {log}", flush=True)
                 # The up server imports the graphs inside its container first.
                 up_agent = name == "AI" and args.ai_runtime == "up"
                 wait_ready(url, children, 420 if up_agent else 180)
             receipt = asyncio.run(check_stack(stack, "Bearer " + bearer))
+            if retained is not None:
+                actual_ai = receipt.get("ai")
+                if (not isinstance(actual_ai, dict) or not isinstance(actual_ai.get("deployment"), dict)
+                        or actual_ai["deployment"].get("git_sha") != retained.runtime_sources["EpochAI"]
+                        or actual_ai.get("reference_version") != retained.native_reference_version):
+                    raise ValueError("The started retained runtime does not match its selected source/reference.")
+                ui_index = next(i for i, service in enumerate(services) if service[0] == "UI")
+                ui_service, ui_child = services[ui_index], children[ui_index]
+                checked = probe(Preview(ui_service[1], ui_service[2], ui_service[3], ui_service[4],
+                                        retained.runtime_sources["EpochClientPortal"], retained.ui_configuration),
+                                ui_child, [p for p in children if p is not ui_child])
+                retained.validate_served_ui(checked)
+                receipt["retained_runtime_cut"] = {**retained.metadata(), "actual_ui_validation": checked}
+                write_json(state / CAPABILITY, {"version": 1, "launcher_pid": os.getpid(),
+                           "launcher_start": process_start(os.getpid()), "status": "disabled",
+                           "mode": "retained-runtime-rollback"})
             (state / "health.json").write_text(
                 json.dumps(receipt, indent=2, default=str)
             )
+            non_ui = list(children)
+            if args.ui_runtime == "build" and retained is None:
+                ui_index = next(i for i, service in enumerate(services) if service[0] == "UI")
+                ui_child = children[ui_index]
+                non_ui.remove(ui_child)
+                portal = ui_refresh_controller(state, stack, services[ui_index], ui_child, children)
             print(
                 f"Ready: {stack.ui_url}\nLocal CLI login is cached. Browser login uses the same account.\n"
                 "Ctrl+C stops these services. No research has been started.",
                 flush=True,
             )
-            while all(child.poll() is None for child in children):
+            last_ui_error = None
+            while all(child.poll() is None for child in non_ui):
+                if portal is not None:
+                    try:
+                        portal.tick()
+                        last_ui_error = None
+                    except (ValueError, OSError, RuntimeError, httpx.HTTPError) as error:
+                        # A UI/control-file failure is not permission to stop
+                        # Backend, AI, Platform or the front door.
+                        if str(error) != last_ui_error:
+                            print(f"Portal refresh needs attention: {error}", file=sys.stderr, flush=True)
+                        last_ui_error = str(error)
                 time.sleep(1)
             raise ValueError("A local service exited. Inspect the logs above.")
         except KeyboardInterrupt:
@@ -1009,8 +1287,12 @@ def main() -> None:
         except (ValueError, OSError, RuntimeError, httpx.HTTPError) as exc:
             parser.exit(1, f"{exc}\n")
         finally:
+            if portal is not None:
+                portal.close()
+            elif retained is not None:
+                clear_capability(state, os.getpid(), process_start(os.getpid()))
             stop(children)
-            if args.ai_runtime == "up":
+            if up_started:
                 # Compose may leave the containers if `langgraph up` stopped early.
                 ai_dir = primary_paths(args.config)[1]["ai_dir"]
                 subprocess.run(
