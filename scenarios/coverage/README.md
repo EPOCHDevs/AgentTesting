@@ -1,239 +1,254 @@
-# Workflow coverage and release phases
+# Product acceptance: one process
 
-Proposed acceptance programme · 27 October 2026 · Source review complete for the
-listed surfaces; live workflow acceptance has not been run.
+**Review:** open the campaign's `reports/dashboard.html`. It shows scenarios,
+agent folders, three assessment bars and related error reports. It is an offline
+snapshot, regenerated after each ledger update. Reload the view to see updates.
+`report` also refreshes it without starting services or model work.
 
-The catalogue contains **90 cases across 14 workflow families**: 37 release
-prerequisites, 37 deeper workflows and 16 advanced compositions/stress cases.
-The source inventory assigns 46 core macros and 37 package groups to these
-families. These counts describe planned scope, not passing coverage.
+**Definitions:** [catalog.json](catalog.json) is the single source for **50
+journeys, 10 workstreams, 36 checks and 37 assignment slots**. Old results are not
+imported. Detailed conditions appear under each dashboard row. Old scenario IDs
+are provenance only; they do not grant passing coverage for untested variants.
 
-Comprehensive means that every supported research journey has a home in the
-checklist, its consequential compositions and failure modes are exercised, and
-the result is independently checked. A catalogue entry, available function,
-successful execution or convincing explanation is not passing coverage.
+Future-feature scenarios live in [the pending registry](../pending/index.json).
+They are excluded from active campaigns and stay pending their linked issues.
 
-The unit of coverage is a person's decision and the workflow needed to support
-it. Changing a ticker, persona or parameter creates a new case only when it
-changes data semantics, analytical reasoning, execution behaviour or a material
-failure mode. We do not enumerate every Cartesian product of features.
+## Cloud-only expectations
 
-## Read and use this programme
+RS01's `cloud_only_expectations` flag covers PDF, Markdown and HTML study exports.
+Run those download checks against a deployed cloud API and a cloud-published run
+with saved outputs. A local Portal connected to that API is eligible. Against a
+local Backend (`local`/`local-up`), verify that Export is disabled and exclude the
+three download checks; continue checking the result table and chart locally.
+Do not count those exclusions as export passes or local regressions. Export
+failures must show an error, with no browser-print fallback. Existing campaigns
+keep their frozen catalogues and evidence: record this owner-approved environment
+boundary in the next plan/review rather than rewriting historical results.
 
-1. [Capability evidence](CAPABILITIES.md): what current source declares, the
-   important qualifications, and what still needs deployment verification.
-2. [Workflow catalogue](WORKFLOWS.md): stable case IDs, phase, research journey,
-   and the evidence that makes each case distinct.
-3. [Acceptance checks](ACCEPTANCE.md): required checks, edge-case assignments,
-   review rules and campaign records.
-4. [Native inventory](capability-inventory.json): source metadata grouped by
-   workflow family, including every core macro. This is an inventory, not a
-   list of verified end-user capabilities.
+## API Playground, cURL and Python notebooks
 
-The existing [role briefs](../README.md) remain useful openings. Select a case
-and a suitable brief, let the researcher respond to the actual answers, and
-record what was exercised. The review contract must not become a script pasted
-into every conversation. No fixed turn count is required.
+The **AP** family, owned by `journey-api`, covers the Playground and its copied
+examples. Definitions and expected outcomes remain in `catalog.json`; this is
+the execution protocol, not a second results ledger. Existing campaign snapshots
+keep their frozen case sets. Start a new campaign to select AP01–AP08.
 
-The repository's [audit scope](../../AGENTS.md) governs every case: vendor data
-and its declared basis are authoritative; audit Epoch's use and calculation of
-those inputs. Preserve original attempts and record reassessments as new reviews.
+For each AP case, freeze the same intended request, context, output declarations
+and fixture for **Playground**, **generated cURL**, and **generated Python in a
+real notebook kernel**. Record the outcome for each surface separately; one
+working client cannot pass all three. Freeze exact origins, Portal/API/SDK/native
+revisions, Python/kernel/import identities and the authorized budget first.
+Distinct intentional submissions normally have distinct operation IDs; compare
+contract semantics and pinned values rather than IDs or model wording.
 
-## What depth means
+Run the copied example, rather than a hand-written equivalent. The notebook
+must retain executed cell inputs, outputs, execution order, package versions and
+the exact research/answer/version references. A code preview, import-only check
+or unexecuted `.ipynb` does not pass. Record any setup, supported local-origin
+binding or returned-ID placeholder substitution; repairing imports, API calls or
+request semantics to get a green run is a finding against the copied example.
+Splitting documented Ask/Run/Read blocks into cells is allowed. Separate read
+cells may inspect the retained typed error, schema and all pinned result rows.
 
-| Depth | Required evidence | Example |
-| --- | --- | --- |
-| D1: establish inputs | Exact universe, identities, windows, units, timestamps and coverage | A complete US-listed equity population and its eligibility accounting |
-| D2: answer the research question | Correct measurements, appropriate comparisons and inspectable evidence | Explain quality, valuation and financial resilience across that population |
-| D3: refine and compose | Preserve the original population and choices while adding a meaningful constraint | Add leverage and liquidity restrictions, then combine fundamentals with momentum |
-| D4: act on the analysis | Explicit model/strategy specification, causal inputs, sizing and execution assumptions | Turn the selected cohort into a monthly factor portfolio and backtest it |
-| D5: validate and reuse | Independent numerical checks, baselines, holdouts, robustness, saved identity and honest limits | Reuse a sealed model or completed backtest; test sensitivity without contaminating the holdout |
+Retain redacted cURL request/response and event captures, the executed notebook,
+browser interactions and screenshots, independent result calculations and native
+admission/effect counts as appropriate. Keep keys/tokens out of source, notebook
+outputs and shared reports. Re-executing a create cell or **Run All** can create
+new paid work; it is not a read-only reconnect. Only a declared supported fixed
+idempotency key may establish replay. Other criterion reviewers reuse the case
+lead's evidence instead of submitting their own duplicate runs.
 
-Not every request needs trading. An economist's forecast can reach D5 through
-validated forecasts and reusable models. A corporate treasurer's research can
-reach D5 through stable exposure estimates and evidence that changes a decision.
-The depth target follows the research need.
+The public Playground is currently gated. `/dev/api-playground` and
+`?failure=clarification` are labelled simulations: they can establish controlled
+rendering/actions, never live API, discovery, notebook or native completion. The
+one-shot migration also requires compatible Backend, Platform, SDK and AI
+targets. Record missing readiness as blocked; do not enable the feature, replace
+the default stack, or mark the migration accepted from this scenario addition.
+Retain the observed phone-width shell clipping as a UI gap until verified fixed.
+Discovery-disable controls remain future work under ENG-3188.
 
-## Phases
+Creating a campaign is offline and does not run these cases:
 
-| Phase | Purpose | Completion rule |
-| --- | --- | --- |
-| P1: prerequisites for release — 37 cases | Exercise the important supported families end to end, including representative compositions, historical intraday and integrity failures | Every P1 case and its assigned acceptance checks has a reviewed passing result on the release candidate; no unresolved critical correctness, leakage, ownership or false-completion defect |
-| P2: deeper workflows — 37 cases | Extend the proven foundations with richer financial questions, model lifecycle comparisons, execution choices and portfolio constraints | P1 remains valid; P2 cases pass with their stated dependencies and the expanded method/asset coverage recorded |
-| P3: advanced composition and stress — 16 cases | Combine several demanding behaviours, larger workloads and uncommon market structures | P1/P2 regressions pass; P3 claims are limited to the combinations actually verified |
+```bash
+.venv/bin/python -m tools.campaign init api-playground-local-20261123 --env local-up \
+  --case AP01 --case AP02 --case AP03 --case AP04 \
+  --case AP05 --case AP06 --case AP07 --case AP08
+.venv/bin/python -m tools.campaign handoff api-playground-local-20261123 --agent journey-api --case AP01
+```
 
-These are proposed release requirements, not a deployment authorization or a
-statement that the product currently passes. A later-phase label is not
-permission for an advertised feature to be incorrect. If a capability is in the
-release promise, move its required case into P1 before the campaign starts.
+Use a new campaign ID if that one exists. Readiness/account gates, a frozen plan,
+explicit fixture/budget authority and independent review still apply.
 
-P1 deliberately includes an all-US-equity journey, a historical membership
-journey, fundamental + technical composition, model training/forecasting,
-costed strategy execution, FX/futures/crypto representation, historical intraday,
-tuning, Monte Carlo and saved-result follow-up. It is more than a smoke suite.
-The full all-US request must be attempted as authored; a small index substitute
-does not satisfy it. Admission, vendor coverage and runtime remain to be measured.
+## MCP workflow and response shapes
 
-Within P1, establish source identity, population and analytical baselines first;
-then validate feature/model boundaries and simple execution accounting. Use those
-artifacts for the combined screening/strategy, intraday, Monte Carlo, tuning and
-saved-result journeys. Apply interaction and evidence checks throughout. P2/P3
-extend these verified foundations; they do not reset the earlier success criteria.
+**MC01–MC14**, owned by `journey-mcp`, cover useful tasks, interaction/output
+shapes and failure boundaries. Use a few small owned fixtures with existing
+independent numerical oracles. RE/RB retain broad research-method and strategy
+coverage; MCP acceptance must still check the actual returned values and claims.
 
-## Families and representative release journeys
+Run the selected shape variants through three separate drivers:
 
-| Family | Decision being tested | P1 anchors | Further depth |
-| --- | --- | --- | --- |
-| UN: universe and fundamental selection | Which companies qualify, why, and does the selection support a strategy? | UN01, UN02, UN07 | Growth durability, cash quality, valuations, segments, capitalization and factor efficacy |
-| TH: technical and hybrid selection | Is an opportunity technical, fundamental, or supported by both? | TH01, TH02 | Breadth, sector effects, timing and multiple timeframes |
-| CO: company, ETF and corporate events | What explains an issuer or fund's economics and event response? | CO01–CO03 | Holdings, IPO identities and international accounting bases |
-| MA: macro and assets | Which economic conditions matter for the chosen exposure? | MA01, MA02 | Policy cycles, growth, supply, liquidity, forecasts and external event evidence |
-| FE: features and explanatory models | Are measured drivers informative and correctly constructed? | FE01, FE02 | Cointegration, structural breaks, state-space estimates and difficult input panels |
-| RE: regimes | Are states causal, interpretable and useful outside their fit? | RE01–RE03 | Clustering, refit mapping, state forecasts and macro/asset compositions |
-| FC: forecasting | Does an explicitly defined forecast improve on an appropriate baseline? | FC01, FC02 | Checkpoints, multiple horizons, rolling fits, macro forecasts, model reuse and downside-risk validation |
-| ST: strategy construction | Does the trading book implement the intended research rule? | ST01–ST03 | Long/short, event rules, priced orders and risk-sensitive sizing |
-| PO: allocation and portfolio risk | Does the proposed allocation solve the investor's actual objective? | PO01 | Constraints, downside objectives, hierarchical methods, views and actual holdings |
-| IN: historical intraday | Does the method respect when information and executable prices exist? | IN01, IN02 | Sessions, profiles, retrospective structure and intraday baskets |
-| XA: asset-specific mechanics | Are results valid for the asset actually researched or traded? | XA01–XA03 | Futures curves, negative prices, roll details and path-dependent execution |
-| VA: validation and robustness | Are performance and uncertainty claims supported? | VA01–VA03 | Stability, multiple comparisons and workload stress |
-| BY: user and saved data | Can an analyst reuse their own evidence without changing its meaning? | BY01 | Imported signals, declared event chronologies and text-derived features |
-| UX: conversation, execution and presentation | Can the user complete, inspect and continue the work reliably? | UX01–UX06, UX09 | Reproduction and richer output forms |
+| Driver | Evidence it establishes |
+| --- | --- |
+| Protocol harness | Actual MCP initialize/list/call behavior, argument/response schemas, forwarding and controlled boundary failures |
+| Claude Code | A fresh installed client can choose the tools, obtain real human decisions and complete or explain the task |
+| Codex | The equivalent fresh-client journey, with its own tool calls, decisions and result interpretation |
 
-## Worked journey: all-US fundamentals → factor strategy
+Keep separate campaigns per driver so a later protocol or host pass cannot hide
+another driver's failure. Freeze `driver`, client and model versions/settings,
+actual MCP endpoint, server/build identity, tool-manifest digest, fixture,
+representative variants and budgets in each attempt's plan/evidence. Do not run
+an exhaustive cross-product by default. Declare the required representative
+variants before execution; an untested variant does not inherit a pass.
 
-This is one coherent journey with consequential extensions, not a set of
-unrelated prompts. UN01 and UN02 own it; TH02 extends it.
+For real client acceptance, use short natural goals without supplying the tool
+sequence or hidden oracle. Let genuine questions determine the next human reply.
+Retain the raw question/choice and actual human answer; choosing a recommendation
+on the user's behalf does not pass. Scripted protocol fixtures are labelled as
+such and cannot establish this client behavior. Judge requested output and
+side effects, rather than identical model wording or one prescribed call order.
 
-1. Establish what “all US equity” means: listing venues, security types,
-   active/current versus historical population, cutoff and issuer/listing policy.
-   Preserve the complete frozen population, counts and exclusions. Do not
-   replace it with search results or a conveniently smaller index.
-2. Screen for a stated economic thesis, such as profitable growth at a reasonable
-   valuation. Inspect revenue, margins, cash conversion, leverage and valuation
-   with compatible periods. Explain which findings support or weaken the thesis.
-3. Refine from that evidence. For example, exclude fragile balance sheets or
-   require sustained cash generation. Preserve earlier predicates, show which
-   names enter/leave and why, and report missing or ineligible names separately.
-4. Investigate an economically meaningful disagreement: cheap but deteriorating
-   businesses, strong earnings with weak cash conversion, or improving operating
-   performance with stretched valuation. The analyst's objective determines the
-   next question.
-5. Establish the historical selection rules before creating a factor strategy:
-   information timing, eligible population at each date, score direction and
-   normalization, ties, rebalance schedule, weights, costs and benchmark basis.
-6. Backtest and explain holdings, turnover, exposures, returns, drawdowns and
-   failures. A current survivor screen is not a historical investable universe.
-   Filing-date alignment is not proof of immutable as-published fundamentals.
-   Preserve those distinctions in the actual claim being tested.
-7. Extend to TH02 only when useful: add momentum/trend or liquidity to the same
-   thesis, and measure its incremental effect over the fundamental baseline.
-8. Validate selected intermediate rows and trade/account reconciliation, then
-   inspect sensitivity or a predeclared holdout. An unprofitable but correct
-   result can pass. A profitable result with leakage cannot.
+Retain credential-redacted MCP calls/results, research/question/execution and
+response/version references, complete table pages, observed human interactions,
+bounded polling/retry/effect counts, timing and measured usage. Record unknown
+costs and partial/truncated output explicitly. Use `deployed_journey` for actual
+installed-client acceptance on a verified deployed target, with evidence of the
+real client interaction. A CLI transcript is not a browser screenshot;
+protocol-only attempts concretely exclude human UI checks and never pass them
+from tool JSON. Genuine UI evidence and independent review remain required for
+the corresponding claims.
 
-Growth durability (UN03), cash quality (UN04), valuation reconstruction (UN05),
-segment concentration (UN06) and capitalization refinement (UN08) are separate
-variants because they require different reasoning and data contracts. Simply
-changing a sector or renaming the analyst is not sufficient.
+Distinguish transport/JSON-RPC errors, MCP `isError`, asynchronous
+`research.status`, native execution and required-output delivery. A successful
+tool response can contain failed research. Usage-limit refusals must not trigger
+retry loops or credential switching. Read/poll calls and embedded instructions
+inside returned source data cannot grant authority to start new work.
 
-## Worked journey: features → regime/model → forecast → decision
+At authoring, both installed `epoch-dev` registrations selected the hosted dev
+server. Capture the actual endpoint again at readiness: a local client does not
+prove a local service target, and a dev name does not prove the latest code is
+deployed. New one-shot/mode-boundary acceptance requires the compatible service
+release described in AP07. This catalogue addition deploys nothing and claims no
+new live MCP acceptance.
 
-1. Specify the target, information cutoff, observation frequency and forecast
-   horizon. Distinguish forecasting a price level, return, conditional variance,
-   economic series or latent-state distribution.
-2. Build economically motivated features: returns, realized volatility, momentum,
-   liquidity or release-aware macro inputs. Preserve missingness and source
-   clocks. FE01 checks scaling, warmup and optional PCA within the allowed history.
-3. Use RE01/RE02 to estimate and reuse an HMM when the question is about regimes.
-   Preserve feature order, units, recipe, cutoff and model identity. State numbers
-   have no permanent economic meaning across refits.
-4. Use FC01 for ARIMA price forecasts and FC02 for GARCH volatility forecasts.
-   Compare the correct target with a declared baseline and an untouched later
-   evaluation window. Price forecast accuracy and volatility accuracy are
-   different claims.
-5. FC03/FC04 distinguish untouched checkpoint forecasts, forecasts after observing
-   new rows, and rolling/expanding refits. Their forecast timestamps and horizons
-   are not interchangeable.
-6. Only then combine models into a decision (RE05/FC06): conditional exposure,
-   volatility sizing or a forecast-driven signal, with a baseline strategy and
-   the actual execution delay. Demonstrate incremental evidence, not just a
-   more complicated dashboard.
+The current `tools.agent_testing ask/answer` path talks to the conversation
+service, bypassing MCP. It can support evidence collection where appropriate;
+it must not be presented as the MCP driver. These are scenario definitions, not
+an implemented MCP orchestration runner. Drive the declared real client/harness
+and attach its evidence to the campaign ledger.
 
-“Train/forecast” refers to the native model families in the evidence inventory.
-An arbitrary estimator, external model or unverified exogenous-feature API is
-not automatically supported because Epoch has model artifacts.
+An offline example selecting a small first slice for each driver:
 
-## Macro themes × assets: meaningful combinations
+```bash
+for driver in protocol claude codex; do
+  .venv/bin/python -m tools.campaign init "mcp-dev-${driver}-20261124" --env dev \
+    --case MC01 --case MC02 --case MC03 --case MC04 --case MC05 --case MC11
+done
+.venv/bin/python -m tools.campaign handoff mcp-dev-codex-20261124 --agent journey-mcp --case MC03
+```
 
-Every selected pairing needs a reason and observable data. These cells allocate
-coverage; they do not claim that every requested series/window is populated.
-Use exact served identities when instantiating a case. Cross-asset results may
-share a study but each leg needs its own coverage and unit checks.
+Use new campaign IDs when needed. The commands only define work: target/account
+readiness, exact shape selection, actual session bindings and an authorized
+call/time/cost budget precede any client invocation or paid research.
 
-| Economic theme | Equity / ETF exposure | FX | Commodity / equity-index futures | Crypto | Case and reason |
-| --- | --- | --- | --- | --- | --- |
-| Inflation and surprises | Broad market and rate-sensitive sectors | USD major pair | Gold/oil or equity-index futures | — | MA01, IN02: discount-rate, currency and commodity channels; daily versus release-time response |
-| Policy tightening/easing | Growth versus value or domestic/export exposures | Rate-differential pair | Equity-index future | Optional later extension | MA03: policy-cycle position and pre-existing inflation conditions |
-| Growth and employment | Cyclical versus defensive sectors | Cyclical currency pair | Copper/oil | — | MA04: growth sensitivity with release-aware information |
-| Energy supply/inventories | Energy producers versus airlines | Commodity-linked currency | Crude term structure | — | MA05, XA04: producer/input-cost/roll channels differ |
-| Liquidity, money and credit conditions | Broad risk exposure | Funding currency | Equity-index future | Major spot pair | MA06: conditional co-movement; no unsupported causal claim or fabricated funding carry |
-| Housing and household demand | Homebuilders/retail versus broad market | — | — | — | MA06: economically focused sector exposure rather than generic cross-asset permutations |
-| Country divergence / trade | Exporter revenue regions and sector mix | Quote/base-country comparison | Relevant commodity where justified | — | MA03, UN06, XA02: country meaning, FX direction and heterogeneous reporting calendars |
-| Economic forecasts and revisions | Relevant sector exposure | Currency comparison | Optional observed exposure | — | MA02, MA07, FC05: current provider forecast versus historical forecast evidence and fitted forecast |
-| Externally established shocks | Broad/sector exposure | Relevant currency | Oil/gold | Optional later extension | MA08: chronology from explicit evidence, distinct from an economic-release calendar |
+## The loop
 
-Bond-focused research/trading stays excluded. Policy rates, macro financial
-conditions and yield observations used to explain an in-scope asset are not
-automatically excluded; do not turn that into a bond-strategy assignment.
+1. Coordinator verifies the local stack and intended account/cleanup, then records
+   the two readiness gates with evidence. Do not start scenarios before that.
+2. Generate a handoff for each chosen agent/case. Bind its actual chat/session.
+3. Case lead freezes the plan: exact target/design/fixture/budget and a target
+   evidence mode or concrete exclusion for every check. It owns fixture writes.
+4. Use the existing runner to ask, capture and report. Other criterion agents
+   assess that same attempt; they do not relaunch it.
+5. Agents record each check and any finding. A different actual reviewer records
+   the verdict. Corrected work gets a new attempt; failed evidence stays visible.
+6. Regenerate the dashboard/CSVs and review failures, blockers and handoffs.
 
-## Strategy shapes that must have a home
+## Commands
 
-| Shape | Case(s) | Distinguishing contract |
-| --- | --- | --- |
-| Buy/hold or periodic allocation | PO01, VA01 | Executed account versus analytical benchmark; cash and dividend treatment |
-| Fundamental cross-sectional factor | UN02, UN07 | Historical eligibility, available inputs, ranks, weights and rebalance |
-| Technical/hybrid ranking and rotation | TH02, ST03 | Cross-sectional ranking versus per-asset signals; incremental filter effect |
-| Time-series trend / breakout | ST01, IN01 | Signal timing, next eligible fill and position persistence |
-| Mean reversion | ST02 | Recovery exit, maximum hold and protective-exit precedence |
-| Long/short or relative value | ST04, FE03 | Both legs, hedge/weight semantics, gross/net exposure and omitted financing |
-| Event / seasonal strategy | ST05, IN02 | Information time, calendar boundaries and event overlap |
-| Model/regime-driven strategy | RE05, FC06 | Causal features, fitted-state semantics, model cutoff and baseline comparison |
-| Allocation / risk-budget strategy | PO02–PO05 | Constraint feasibility, covariance/return estimation and realized weights |
-| Limit, stop and stop-limit execution | ST06 | Submission versus activation, expiry/cancellation, gaps and partial fills |
-| Risk-managed scaling / insurance | ST07 | Sizing clock, equity feedback, floors and exposure caps |
-| Futures continuation and carry | XA01, XA04 | Real contracts, multipliers, two leg prices and roll convention |
-| Intraday and multi-timeframe | IN01–IN06, TH05 | Session clocks, completed higher-timeframe information and bar-path uncertainty |
-| Explicit futures price-path / pyramiding | XA06 | Supported path and unit lifecycle; distinct from ordinary bar execution |
+Run from `AgentTesting`.
+All `tools.campaign` commands are offline. The existing runner retains its own
+network/authorization rules; only its `ask` and `answer` initiate model runs.
 
-## Personas and the original six briefs
+```bash
+.venv/bin/python -m tools.campaign init product-local-20261122 --env local-up
+.venv/bin/python -m tools.campaign handoff product-local-20261122 --agent journey-results --case RS04
+.venv/bin/python -m tools.campaign report product-local-20261122
+```
 
-Personas provide motivation and success criteria. They are not independent
-coverage counts. Use the same family with different personas only when their
-decision, constraints or evidence needs differ.
+`init` refuses to overwrite a campaign. Use a new campaign ID for a different
+catalogue or environment; each campaign freezes the catalogue and its hash.
+The generated handoff includes the claim, plan and report commands for that case.
+Before any live work, the coordinator binds its session and records readiness:
 
-| Existing brief | Natural continuation | What would make the extension useful |
-| --- | --- | --- |
-| Industrial resilience | CO01 → UN04 → UN01/UN02 | Expand a two-company judgment into a defensible universe and portfolio thesis |
-| A simpler equity ride | ST01/ST02 → VA01–VA03 → PO01 | Quantify costs, risk, robustness and the tradeoff against a simple alternative |
-| The next inflation outlook | MA02 → FE01 → FC05 → RE06 | Separate revisions, fit evidence, uncertainty and conditional economic states |
-| Euro revenue exposure | XA02 → FE02 → MA03 | Quote direction, revenue currency and the stability of an exposure relationship |
-| Fuel and airline performance | MA05 → FE02 → XA04 | Separate commodity spot/futures/roll effects from airline operating exposure |
-| Diversifying technology exposure | TH03 → PO01/PO02 → FE02 | Determine whether the new basket changes actual factor and country risk |
+```bash
+.venv/bin/python -m tools.campaign claim product-local-20261122 --agent campaign-coordinator --thread ACTUAL_SESSION_ID
+.venv/bin/python -m tools.campaign gate product-local-20261122 --agent campaign-coordinator --name target_ready --status ready --evidence TARGET_RECEIPT --note 'Exact local targets ready'
+.venv/bin/python -m tools.campaign gate product-local-20261122 --agent campaign-coordinator --name account_ready --status ready --evidence CLEANUP_RECEIPT --note 'Verified intended account; cleanup complete'
+```
 
-Add briefs for an event analyst, historical intraday trader, commodity PM, model
-researcher and portfolio-risk analyst when instantiating those cases. Reuse the
-case acceptance contract; do not manufacture different feature lists by persona.
+For a check, retain the real runner report/capture, then record its observation:
 
-## Coverage accounting
+```bash
+.venv/bin/python -m tools.campaign record product-local-20261122 --agent ui-u12 --case RS04 --attempt ATTEMPT_ID --criterion U12 --status fail --level captured_browser --evidence EVIDENCE_FILE --note 'Observed behavior'
+.venv/bin/python -m tools.campaign finding product-local-20261122 --agent ui-u12 --case RS04 --attempt ATTEMPT_ID --criterion U12 --key duplicate-reconnect --evidence EVIDENCE_FILE --note 'Expected X; observed Y'
+```
 
-Track separate denominators for: workflow cases; depth stages; meaningful
-asset/macro combinations; native method/option contracts; and common acceptance
-checks. A family passing once does not prove every model, allocator or order
-type in that family. The native inventory assigns ownership so a new source or
-macro cannot disappear from planning, while method-level evidence must name the
-exact methods and configurations actually used.
+Add `--issue ENG-1234` only for an actual linked issue. The tool does not create
+issues or labels. Use `[case][criterion][agent_id]` in issue titles and preserve
+reporter/session attribution. Match existing symptoms/contracts before filing a
+duplicate. A shared key groups reports; it is not proof of a shared cause.
 
-Before a release campaign, freeze scope, environments, revisions, cases,
-fixtures, tolerances and review assignments. Preserve unknowns and failures in
-the ledger. Extend this plan when the verified capability inventory changes;
-do not infer deployment coverage from local metadata or a marketing guide.
+## Status and evidence
+
+| Status | Meaning |
+| --- | --- |
+| not run / unassigned | No observation / no actual agent binding |
+| running | Work or a declared check is in progress |
+| blocked | A named prerequisite is missing |
+| fail | An observed required check failed |
+| awaiting review | Required checks pass; independent acceptance is pending |
+| pass | All required checks plus current independent review pass |
+| stale evidence | A referenced proof file changed or disappeared |
+| not applicable | Explicit exclusion in the frozen plan, with a reason |
+
+Research correctness, UI/UX and coordination are separate verdicts. No averaging.
+Screenshots prove appearance, native receipts prove effects, and source CI proves
+its tested scope. None automatically supplies the others. Unknown cost/effects
+stay unknown. Vendor data/basis are authoritative; audit Epoch's use of them.
+
+`agent_testing pull` preserves the previous and new collector views under
+`.artifacts/<attempt>/collection-snapshots/`. Its returned `collection_snapshot`
+manifest maps source names to immutable content objects. Use those object paths
+when freezing review evidence; top-level thread, transcript, status and trace
+files are current views and can change on another pull. Snapshotting cannot
+recover files overwritten before this retention was introduced.
+
+## Files and ownership
+
+```text
+scenarios/coverage/catalog.json       definitions only
+campaigns/<campaign>/campaign.json   environment, selected cases, frozen hash
+campaigns/<campaign>/catalog.json    immutable campaign snapshot
+campaigns/<campaign>/agents/<id>/events.jsonl  that agent's append-only records
+campaigns/<campaign>/reports/         generated dashboard, JSON, Markdown, CSVs
+.artifacts/<attempt>/                existing runner's private captures/report
+```
+
+Each criterion has `agent_id`; case leads own the full attempt. One actual agent
+may fill compatible slots. Independent review requires another actual session,
+not a second label. Reassignment uses `claim --handoff 'reason'` and keeps old
+bindings. Event logs are hash chained and briefly locked across concurrent writes.
+Evidence files are referenced by path/hash; the dashboard never copies raw traces.
+
+Keep credentials out of notes and published files. Controlled/scripted fixtures
+must be labelled. Unsupported paths and historical limitations stay explicit.
+The tracker does not deploy, mutate fixtures, cancel work or submit research.
+
+## Natural conversation acceptance
+
+Future human-facing acceptance uses short natural openings and replies, normally
+one or two lines at a time. Let actual questions drive the next reply; keep
+technical contracts, IDs and numeric oracles private unless the real human
+supplied them. Earlier operator-directed diagnostics remain diagnostic evidence,
+not natural-conversation acceptance. Real-user witnesses live separately under
+`../user-witnesses/`; they do not alter a frozen campaign catalogue.

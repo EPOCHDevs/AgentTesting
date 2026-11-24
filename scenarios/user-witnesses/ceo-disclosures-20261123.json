@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "mode": "natural_conversation_acceptance",
+  "instructions": [
+    "Opening and each human reply are normally1\u20132 natural lines.",
+    "Let actual assistant clarification questions drive short ordinary replies.",
+    "Keep IDs,API contracts,expected numeric answers and implementation assertions in a private oracle, not simulated human prose.",
+    "Technical values or IDs appear in a user turn only when the human actually supplies them.",
+    "Preserve operator-directed diagnostic attempts and label their limited scope; do not relabel them natural-conversation acceptance."
+  ],
+  "witness": {
+    "scenario_id": null,
+    "name": "CEO disclosures and stock moves",
+    "registration": "New real-user witness; not added to frozen28-case historical catalogue.",
+    "attempt": "ceo-user-witness-20261123-v1",
+    "opening_message": "when CEO's have scandal what are the 1d 5d and 20day move of thier comnpany stocks look like",
+    "replay": "Not performed or authorized by this triage receipt."
+  }
+}

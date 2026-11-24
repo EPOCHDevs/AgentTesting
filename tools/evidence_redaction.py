@@ -55,3 +55,11 @@ def redact_trace_run(run: TraceRun) -> TraceRun:
     metadata = deepcopy(run.metadata)
     _redact(metadata if isinstance(metadata, dict) else None, _LEGACY_HEADERS)
     return run.model_copy(update={"extra": extra, "metadata": metadata})
+
+
+def redact_trace_payload(run: dict) -> dict:
+    """Apply the same auth-only policy to an already serialized trace row."""
+    saved = deepcopy(run)
+    _redact(_object(_object(saved, "extra"), "metadata"), _LEGACY_HEADERS)
+    _redact(_object(saved, "metadata"), _LEGACY_HEADERS)
+    return saved
