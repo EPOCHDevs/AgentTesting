@@ -156,6 +156,34 @@ preview dependency inputs. Changes to those inputs need a reviewed bootstrap.
 Building never prunes an active or rollback bundle. The command sends no model,
 provider, study or account operations and does not reload a person's browser.
 
+An explicitly reviewed rollback may select previously qualified artifacts while
+the primary checkouts remain at their current qualified revisions:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up --ui-runtime build \
+  --retained-cut /absolute/path/manifest.json \
+  --retained-cut-admission /absolute/path/review.json \
+  --retained-cut-admission-sha <review-file-sha256>
+```
+
+This is a separate operator-selected mode, never an automatic fallback. The
+normal clean, current integration-branch checks still run. The manifest pins
+workspace revisions separately from the runtime revisions, the existing AI
+image's full immutable ID, the original managed UI bundle and every file hash,
+configuration/dependency inputs, primary Native binaries/reference, stack
+identity and the original runtime qualification receipt. The independent
+passing review binds the exact manifest hash. The files contain hashes and
+paths, not environment credentials. Missing or changed artifacts/configuration
+fail before service preparation; this mode never builds, pulls, resets source
+or relabels an old artifact as new source. Readiness verifies the selected AI
+source/reference and the served UI hashes. Its health receipt explicitly records
+the retained runtime and current workspace separately.
+
+Portal refresh is disabled in retained mode, and UI failure retains the original
+all-service shutdown behavior. Leaving this mode requires a separately reviewed
+normal bootstrap. A failed startup preflight never runs Compose cleanup against
+an already-running stack; cleanup belongs only to a launcher that started AI.
+
 Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
 **off by default**. The local stack uses the production vendor accounts, and
 automatic page refresh can spend the shared Barchart hourly quota that

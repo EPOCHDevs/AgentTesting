@@ -29,6 +29,17 @@ REQUEST = "ui-refresh-request.json"
 RESULT = "ui-refresh-result.json"
 
 
+def clear_capability(state: Path, pid: int, started: str) -> None:
+    path = state / CAPABILITY
+    try:
+        value = json.loads(path.read_text())
+        if (isinstance(value, dict) and value.get("launcher_pid") == pid
+                and value.get("launcher_start") == started):
+            path.unlink()
+    except (ValueError, OSError):
+        pass
+
+
 class Child(Protocol):
     pid: int
 
@@ -286,14 +297,7 @@ class Controller:
             request.unlink()
 
     def close(self) -> None:
-        path = self.state / CAPABILITY
-        try:
-            value = json.loads(path.read_text())
-            if (isinstance(value, dict) and value.get("launcher_pid") == self.pid
-                    and value.get("launcher_start") == self.started):
-                path.unlink()
-        except (ValueError, OSError):
-            pass  # Receipt cleanup must never prevent owned service shutdown.
+        clear_capability(self.state, self.pid, self.started)
 
 
 def request_refresh(state: Path, commit: str, configuration: str, timeout: float = 300) -> dict:
@@ -314,6 +318,8 @@ def request_refresh(state: Path, commit: str, configuration: str, timeout: float
             raise ValueError("The Portal-refresh capability is invalid; no request was submitted.")
         if cap["launcher_start"] != process_start(cap["launcher_pid"]):
             raise ValueError("The Portal-refresh capability is stale; no request was submitted.")
+        if cap.get("status") == "disabled":
+            raise ValueError("Portal refresh is disabled in retained-runtime rollback mode.")
         if cap.get("status") == "refreshing" or (state / REQUEST).exists():
             raise ValueError("A Portal refresh is still pending; reconcile its saved result before another.")
         request_id = str(uuid4())
