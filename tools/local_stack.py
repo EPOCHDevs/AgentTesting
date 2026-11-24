@@ -22,6 +22,7 @@ import httpx
 from dotenv import dotenv_values
 
 from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
+from tools.local_agent_processes import verify_local_agent_isolation
 from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -396,8 +397,24 @@ def up_compose_override(
             "    volumes:",
             f'      - "{RELAY}:{RELAY}:ro"',
             "    restart: unless-stopped",
+            "    healthcheck:",
+            "      test: " + json.dumps(["CMD", "python", "-c", relay_health_probe(relay_port)]),
+            "      interval: 30s",
+            "      timeout: 5s",
+            "      retries: 3",
+            "      start_period: 5s",
         ]
     return "\n".join(lines) + "\n"
+
+
+def relay_health_probe(port: int) -> str:
+    """Probe the forwarded Backend, rather than the inherited API/Redis check."""
+    return (
+        "import http.client; "
+        f"c=http.client.HTTPConnection('127.0.0.1',{port},timeout=3); "
+        "c.request('GET','/health'); r=c.getresponse(); "
+        "raise SystemExit(0 if r.status==200 else 1)"
+    )
 
 
 def exclude_locally(repo: Path, names: tuple[str, ...]) -> None:
@@ -540,6 +557,31 @@ def prepare_ui_build(
     return ("UI", command, ui, ui_env, stack.ui_url)
 
 
+def prepare_reference_files(binary: Path, commit: str, state: Path, base: dict[str, str]) -> Path:
+    """Export the actual local engine's reference generation; never borrow hosted metadata."""
+    exporter = binary.with_name("epoch_reference_files")
+    if not os.access(exporter, os.X_OK):
+        raise ValueError(
+            f"Missing {exporter}. Build the epoch_reference_files target in the primary Backend first."
+        )
+    generation = Path(tempfile.mkdtemp(prefix="reference-files-", dir=state))
+    log = state / "reference-export.log"
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        result = subprocess.run(
+            [str(exporter), "--output", str(generation), "--release", "local", "--git-sha", commit],
+            cwd=binary.parent, env=base, stdout=stream, stderr=subprocess.STDOUT,
+        )
+    if result.returncode:
+        raise ValueError(f"The local engine reference export failed. Inspect {log}.")
+    manifest = json.loads((generation / "manifest.json").read_text())
+    reference = json.loads((generation / "agents/reference-library.json").read_text())
+    if (manifest.get("format") != "epoch-reference-files-v1"
+            or manifest.get("engine", {}).get("git_sha") != commit
+            or not manifest.get("version") or reference.get("version") != manifest["version"]):
+        raise ValueError("The local engine exported an inconsistent reference generation.")
+    return generation
+
+
 def prepare_platform(
     platform: Path,
     node: str,
@@ -549,6 +591,7 @@ def prepare_platform(
     project: Path,
     commit: str,
     state: Path,
+    reference_root: Path,
 ) -> tuple:
     """Epoch Platform's general service, with Files and Space on local disk and no AWS account.
 
@@ -578,8 +621,34 @@ def prepare_platform(
         "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
         "EPOCH_FILES_LOCAL_ROOT": str(project / "personal_content"),
         "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
+        "EPOCH_REFERENCE_LOCAL_ROOT": str(reference_root),
         **files_access,
     })
+    # GDS is a shared catalogue service in deployed stacks too. Read only its
+    # explicit connection settings; local Files and observation reads stay local.
+    settings = platform / ".env.local"
+    connection = read_env(settings) if settings.is_file() else {}
+    discovery_url = connection.get("EPOCH_DISCOVERY_GDS_URL", "").strip()
+    discovery_token = connection.get("EPOCH_DISCOVERY_SERVICE_TOKEN", "").strip()
+    if bool(discovery_url) != bool(discovery_token):
+        raise ValueError("Platform .env.local needs both discovery GDS URL and service token.")
+    if discovery_url:
+        env.update({
+            "EPOCH_DISCOVERY_GDS_URL": discovery_url,
+            "EPOCH_DISCOVERY_SERVICE_TOKEN": discovery_token,
+            "EPOCH_DISCOVERY_NATIVE_URL": f"http://127.0.0.1:{BACKEND_PORT}",
+        })
+    # Identity has its own GDS credential; discovery configuration is not an
+    # identity grant, and neither credential reaches Backend, AI or the browser.
+    identity_url = connection.get("EPOCH_IDENTITY_GDS_URL", "").strip()
+    identity_token = connection.get("EPOCH_IDENTITY_GDS_TOKEN", "").strip()
+    if bool(identity_url) != bool(identity_token):
+        raise ValueError("Platform .env.local needs both identity GDS URL and service token.")
+    if identity_url:
+        env.update({
+            "EPOCH_IDENTITY_GDS_URL": identity_url,
+            "EPOCH_IDENTITY_GDS_TOKEN": identity_token,
+        })
     issuer = backend_values.get("EPOCH_TOKEN_ISSUER", "").strip()
     if issuer:
         # Delegated tokens from the local v1 host, which the local Backend signs.
@@ -656,6 +725,10 @@ def prepare(
             flush=True,
         )
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
+    verify_local_agent_isolation(
+        ai,
+        (stack.backend_url, f"http://127.0.0.1:{BACKEND_PORT}", f"http://127.0.0.1:{PLATFORM_PORT}"),
+    )
     platform = paths["platform_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
@@ -720,6 +793,7 @@ def prepare(
         "AWS_EC2_METADATA_DISABLED": "true",
         "EPOCH_CAMPAIGN_SERVER": stack.backend_url,
         "EPOCH_BACKEND_URL": stack.backend_url,
+        "EPOCH_PLATFORM_SERVER": stack.backend_url,
         "EPOCH_AI_URL": stack.ai_url,
         "LANGGRAPH_API_URL": stack.ai_url,
         "COGNITO_REGION": REGION,
@@ -750,8 +824,16 @@ def prepare(
     # LangGraph loads its config env after process env. Supply local overrides
     # inside a private generated config, leaving the product's files untouched.
     graph_config = json.loads((ai / "langgraph.json").read_text())
+    if graph_config.get("auth", {}).get("path"):
+        # Studio must authenticate as the actual Cognito caller, not a workspace
+        # StudioUser that cannot pass Epoch's per-owner thread authorization.
+        graph_config["auth"]["disable_studio_auth"] = True
     env_source = graph_config.get("env", {})
     ai_values = read_env(ai / env_source) if isinstance(env_source, str) else env_source
+    # Local-only credentials and provider choices override the graph's base env.
+    # Keep them server-side; UI and Backend environments are built separately.
+    if (ai / ".env.local").is_file():
+        ai_values = {**ai_values, **read_env(ai / ".env.local")}
     # A local launch is a versioned deployment too. Keep operator overrides;
     # otherwise identify it by the clean, verified AI source actually launched.
     revision = ai_values.get("EPOCH_COMMENTARY_DEPLOYMENT_REVISION", "").strip()
@@ -775,9 +857,10 @@ def prepare(
         + ("on" if ai_values.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") == "true" else "off"),
         flush=True,
     )
+    reference_root = prepare_reference_files(binary, revisions["EpochBackend"]["commit"], state, base)
     platform_service = prepare_platform(
         platform, node, base, backend_values, files_access,
-        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state,
+        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state, reference_root,
     )
     print(
         "Files and Space: Epoch Platform, on local disk in "

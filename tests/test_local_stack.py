@@ -32,9 +32,26 @@ def test_occupied_port_is_not_reused():
             local_stack.check_ports([sock.getsockname()[1]])
 
 
+@pytest.mark.parametrize("setting", [
+    "EPOCH_IDENTITY_GDS_URL=https://identity.example\n",
+    "EPOCH_IDENTITY_GDS_TOKEN=independent-identity-credential\n",
+])
+def test_platform_rejects_partial_identity_configuration(tmp_path, monkeypatch, setting):
+    (tmp_path / ".env.local").write_text(setting)
+    main = tmp_path / "apps/platform/dist/main.js"
+    main.parent.mkdir(parents=True)
+    main.touch()
+    monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs:
+                        subprocess.CompletedProcess([], 0))
+    with pytest.raises(ValueError, match="both identity GDS URL and service token"):
+        local_stack.prepare_platform(tmp_path, "/bin/node", {}, {}, {}, tmp_path,
+                                     "p" * 40, tmp_path, tmp_path / "reference")
+
+
 @pytest.mark.parametrize("operator_revision", [None, "", "  ", "operator-deployment-7"])
 @pytest.mark.parametrize("native_mi_plugin", [False, True])
-def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision, native_mi_plugin):
+@pytest.mark.parametrize("identity_configured", [False, True])
+def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_revision, native_mi_plugin, identity_configured):
     ai, ui, backend, platform = [
         tmp_path / name for name in ("EpochAI", "EpochClientPortal", "EpochBackend", "EpochPlatform")
     ]
@@ -50,6 +67,13 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         },
     )
     (platform / "node_modules/typescript").mkdir(parents=True)
+    (platform / ".env.local").write_text(
+        "EPOCH_DISCOVERY_GDS_URL=https://gds.example\n"
+        "EPOCH_DISCOVERY_SERVICE_TOKEN=discovery-credential\n"
+        "EPOCH_DISCOVERY_NATIVE_URL=https://wrong.example\nAWS_PROFILE=must-not-inherit\n"
+        + ("EPOCH_IDENTITY_GDS_URL=https://identity.example\n"
+           "EPOCH_IDENTITY_GDS_TOKEN=independent-identity-credential\n" if identity_configured else "")
+    )
     builds = []
 
     def build(command, cwd, env, **_):
@@ -59,6 +83,7 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(local_stack.subprocess, "run", build)
+    monkeypatch.setattr(local_stack, "prepare_reference_files", lambda *_: tmp_path / "native-reference")
     for file in (
         backend / "build/bin/epoch_stratifyx_server",
         ai / ".venv/bin/langgraph",
@@ -81,6 +106,9 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
         "LANGSMITH_LANGGRAPH_GIT_REF=dev\nLANGSMITH_LANGGRAPH_GIT_REF_SHA=stale-cloud-sha\n"
         + (f'EPOCH_COMMENTARY_DEPLOYMENT_REVISION="{operator_revision}"\n'
            if operator_revision is not None else "")
+    )
+    (ai / ".env.local").write_text(
+        "EPOCH_OPENAI_PROVIDER=openai\nOPENAI_DIRECT_API_KEY=private-direct-fixture\n"
     )
     graph = {
         "dependencies": [".", "./packages/local"],
@@ -115,6 +143,20 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert files[1][1:] == ["apps/platform/dist/main.js"] and files[2] == platform
     assert files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(state / "backend/personal_content")
     assert files[3]["EPOCH_DEFINITIONS_LOCAL_ROOT"] == str(state / "backend/definitions")
+    assert files[3]["EPOCH_REFERENCE_LOCAL_ROOT"] == str(tmp_path / "native-reference")
+    assert files[3]["EPOCH_DISCOVERY_GDS_URL"] == "https://gds.example"
+    assert files[3]["EPOCH_DISCOVERY_SERVICE_TOKEN"] == "discovery-credential"
+    assert files[3]["EPOCH_DISCOVERY_NATIVE_URL"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
+    assert "EPOCH_DISCOVERY_SERVICE_TOKEN" not in _agent[3]
+    if identity_configured:
+        assert files[3]["EPOCH_IDENTITY_GDS_URL"] == "https://identity.example"
+        assert files[3]["EPOCH_IDENTITY_GDS_TOKEN"] == "independent-identity-credential"
+    else:
+        assert "EPOCH_IDENTITY_GDS_URL" not in files[3]
+        assert "EPOCH_IDENTITY_GDS_TOKEN" not in files[3]
+    for service in (be, _agent, portal):
+        assert "EPOCH_IDENTITY_GDS_URL" not in service[3]
+        assert "EPOCH_IDENTITY_GDS_TOKEN" not in service[3]
     assert files[3]["EPOCH_ENVIRONMENT"] == "local" and files[3]["EPOCH_PLATFORM_ROLE"] == "general"
     assert files[3]["PORT"] == str(local_stack.PLATFORM_PORT)
     assert files[3]["EPOCH_PLATFORM_REVISION"] == "p" * 40
@@ -145,12 +187,19 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert portal[3]["VITE_API_BASE_URL"] == stack.backend_url
     assert portal[3]["VITE_LANGGRAPH_API_URL"] == stack.ai_url
     generated = json.loads((state / "ai/langgraph.json").read_text())
+    assert generated["auth"]["disable_studio_auth"] is True
     revision = (operator_revision or "").strip() or "local-" + ai_commit
     assert generated["env"]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
     assert _agent[3]["EPOCH_COMMENTARY_DEPLOYMENT_REVISION"] == revision
     assert generated["env"]["LANGSMITH_LANGGRAPH_GIT_REF"] == "main"
     assert generated["env"]["LANGSMITH_LANGGRAPH_GIT_REF_SHA"] == ai_commit
     assert _agent[3]["LANGSMITH_LANGGRAPH_GIT_REF_SHA"] == ai_commit
+    assert generated["env"]["EPOCH_OPENAI_PROVIDER"] == "openai"
+    assert generated["env"]["OPENAI_DIRECT_API_KEY"] == "private-direct-fixture"
+    assert _agent[3]["OPENAI_DIRECT_API_KEY"] == "private-direct-fixture"
+    assert generated["env"]["MODEL_KEY"] == "private"
+    assert "OPENAI_DIRECT_API_KEY" not in be[3]
+    assert "OPENAI_DIRECT_API_KEY" not in portal[3]
     receipt = json.loads((state / "source-checkouts.json").read_text())
     assert receipt["EpochAI"]["commentary_deployment_revision"] == revision
     assert generated["env"]["EPOCH_CAMPAIGN_SERVER"] == stack.backend_url
