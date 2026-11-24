@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from collections.abc import Callable
 import fcntl
 import hashlib
 import json
@@ -522,6 +523,8 @@ def prepare_ui_build(
     port: int,
     commit: str,
     state: Path,
+    *,
+    source_guard: Callable[[], None] | None = None,
 ) -> tuple:
     """The Portal's production bundle, served by `vite preview`, as a deployment serves it.
 
@@ -531,6 +534,8 @@ def prepare_ui_build(
     `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
     """
     build_env, configuration = ui_build_configuration(ui, ui_env, stack)
+    if source_guard is not None:
+        source_guard()
     builds = private_dir(state / "ui-builds")
     bundle = builds / f"{commit[:12]}-{configuration[:12]}"
     if not (bundle / "index.html").is_file():
@@ -551,6 +556,8 @@ def prepare_ui_build(
                 raise ValueError(f"The UI build timed out. Inspect {log}.") from error
         if built.returncode or not (partial / "index.html").is_file():
             raise ValueError(f"The UI build failed. Inspect {log}.")
+        if source_guard is not None:
+            source_guard()
         partial.rename(bundle)
         # A running preview or a failed replacement may still need an older
         # immutable bundle. Building never deletes another generation.
@@ -558,6 +565,8 @@ def prepare_ui_build(
         corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(bundle),
         "--host", "127.0.0.1", "--port", str(port), "--strictPort",
     ]
+    if source_guard is not None:
+        source_guard()
     return ("UI", command, ui, ui_env, stack.ui_url)
 
 
@@ -587,6 +596,12 @@ def ui_preview_inputs(ui: Path) -> str:
     return digest.hexdigest()
 
 
+def require_primary_ui_source(ui: Path, commit: str) -> None:
+    actual = verify_primary_checkouts()["EpochClientPortal"]
+    if actual["path"] != str(ui) or actual["commit"] != commit:
+        raise ValueError("The primary Portal is not at the exact qualified target commit.")
+
+
 def ui_refresh_controller(state: Path, stack: Stack, service: tuple, child, children: list) -> Controller:
     _name, command, ui, ui_env, url = service
     source = json.loads((state / "source-checkouts.json").read_text())["EpochClientPortal"]
@@ -598,20 +613,28 @@ def ui_refresh_controller(state: Path, stack: Stack, service: tuple, child, chil
         if ui_preview_inputs(ui) != preview_inputs:
             raise ValueError("Portal preview configuration/dependencies changed; keep the old UI and use a reviewed bootstrap.")
 
+    def target_guard(commit: str) -> None:
+        require_primary_ui_source(ui, commit)
+        guard()
+
     def stage(commit: str, expected_configuration: str) -> Preview:
         # Read-only preflight; refresh cannot switch repositories or select a
         # worktree, and it cannot change another service's process/configuration.
-        actual = verify_primary_checkouts()["EpochClientPortal"]
-        if actual["path"] != str(ui) or actual["commit"] != commit:
-            raise ValueError("The primary Portal is not at the exact qualified target commit.")
+        def source_guard() -> None:
+            target_guard(commit)
+
+        source_guard()
         _build_env, current_configuration = ui_build_configuration(ui, ui_env, stack)
         if current_configuration != expected_configuration:
             raise ValueError("The primary Portal configuration differs from the requested SHA256.")
-        prepared = prepare_ui_build(ui, command[0], ui_env, stack, urlsplit(url).port or 3000, commit, state)
+        prepared = prepare_ui_build(ui, command[0], ui_env, stack, urlsplit(url).port or 3000,
+                                    commit, state, source_guard=source_guard)
+        source_guard()
         guard()
         return Preview(prepared[1], ui, ui_env, url, commit, current_configuration)
 
-    return Controller(state, initial, child, children, stage, start_preview, stop, guard=guard)
+    return Controller(state, initial, child, children, stage, start_preview, stop,
+                      guard=guard, target_guard=target_guard)
 
 
 def prepare_reference_files(binary: Path, commit: str, state: Path, base: dict[str, str]) -> Path:
@@ -1016,6 +1039,7 @@ def prepare(
         prepare_ui_build(
             ui, corepack, ui_env, stack, ports[2],
             revisions["EpochClientPortal"]["commit"], state,
+            source_guard=lambda: require_primary_ui_source(ui, revisions["EpochClientPortal"]["commit"]),
         )
         if ui_runtime == "build"
         else (

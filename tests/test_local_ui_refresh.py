@@ -312,6 +312,105 @@ def test_ui_build_timeout_cannot_remove_retained_bundle(tmp_path, monkeypatch):
     assert (retained / "index.html").read_text() == "old bundle"
 
 
+def test_source_change_during_build_cannot_publish_a_mislabelled_cached_generation(tmp_path, monkeypatch):
+    retained = tmp_path / "ui-builds" / "retained"
+    retained.mkdir(parents=True)
+    (retained / "index.html").write_text("old bundle")
+    stack = local_stack.Stack.load(Path("environments.toml"), "local")
+    checked = []
+    restored, builds = [], []
+
+    def guard():
+        checked.append(1)
+        if len(checked) == 2 and not restored:
+            raise ValueError("source changed during build")
+
+    def build(command, **kwargs):
+        builds.append(1)
+        partial = Path(command[command.index("--outDir") + 1])
+        partial.mkdir()
+        (partial / "index.html").write_text(f"new bundle {len(builds)}")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_stack.subprocess, "run", build)
+    with pytest.raises(ValueError, match="source changed during build"):
+        local_stack.prepare_ui_build(tmp_path, "corepack", {}, stack, 3000, "b" * 40,
+                                     tmp_path, source_guard=guard)
+    assert (retained / "index.html").read_text() == "old bundle"
+    assert not any(path.name.startswith("b" * 12) and not path.name.endswith(".partial")
+                   for path in (tmp_path / "ui-builds").iterdir())
+    restored.append(True)
+    result = local_stack.prepare_ui_build(tmp_path, "corepack", {}, stack, 3000, "b" * 40,
+                                          tmp_path, source_guard=guard)
+    published = Path(result[1][result[1].index("--outDir") + 1])
+    assert (published / "index.html").read_text() == "new bundle 2" and len(builds) == 2
+    assert (retained / "index.html").read_text() == "old bundle"
+
+
+@pytest.mark.parametrize("drift", ["head", "dirty"])
+@pytest.mark.parametrize("phase", ["build", "shadow"])
+def test_exact_primary_source_is_rechecked_during_build_and_before_ui_stop(tmp_path, monkeypatch, drift, phase):
+    value, others, old, events = controller(tmp_path)
+    stack = local_stack.Stack.load(Path("environments.toml"), "local")
+    ui.write_json(tmp_path / "source-checkouts.json", {"EpochClientPortal": {"commit": "a" * 40}})
+    source = {"commit": "b" * 40, "dirty": False}
+
+    def drift_source():
+        if drift == "head":source["commit"] = "d" * 40
+        else:source["dirty"] = True
+
+    def verify():
+        if source["dirty"]:raise ValueError("Portal has uncommitted tracked changes")
+        return {"EpochClientPortal": {"path": str(tmp_path), "commit": source["commit"]}}
+
+    def build(command, **kwargs):
+        partial = Path(command[command.index("--outDir") + 1]);partial.mkdir()
+        (partial / "index.html").write_text("controlled new source")
+        if phase == "build":drift_source()
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_stack, "verify_primary_checkouts", verify)
+    monkeypatch.setattr(local_stack.subprocess, "run", build)
+    production = local_stack.ui_refresh_controller(tmp_path, stack,
+        ("UI", value.preview.command, value.preview.cwd, value.preview.env, value.preview.url), old, value.children)
+    production.start, production.stop = value.start, value.stop
+    original_check = value.check
+
+    def check(preview, child, remaining):
+        result = original_check(preview, child, remaining)
+        if phase == "shadow":drift_source()
+        return result
+
+    production.check = check
+    result = submit(production, configuration=production.preview.configuration)
+    assert result["status"] == "failed" and production.child is old
+    assert "stop:old" not in events and all(not p.dead for p in others)
+    if phase == "build":assert not any(p.name.startswith("b" * 12) and not p.name.endswith(".partial")
+                                       for p in (tmp_path / "ui-builds").iterdir())
+
+
+def test_old_bundle_rollback_does_not_require_old_primary_head(tmp_path, monkeypatch):
+    value, others, old, events = controller(tmp_path, failure="health")
+    stack = local_stack.Stack.load(Path("environments.toml"), "local")
+    ui.write_json(tmp_path / "source-checkouts.json", {"EpochClientPortal": {"commit": "a" * 40}})
+    monkeypatch.setattr(local_stack, "verify_primary_checkouts", lambda: {
+        "EpochClientPortal": {"path": str(tmp_path), "commit": "b" * 40}})
+
+    def build(command, **kwargs):
+        partial = Path(command[command.index("--outDir") + 1]);partial.mkdir()
+        (partial / "index.html").write_text("new source")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_stack.subprocess, "run", build)
+    production = local_stack.ui_refresh_controller(tmp_path, stack,
+        ("UI", value.preview.command, value.preview.cwd, value.preview.env, value.preview.url), old, value.children)
+    production.start, production.stop, production.check = value.start, value.stop, value.check
+    result = submit(production, configuration=production.preview.configuration)
+    assert result["status"] == "failed" and result["rollback_healthy"]
+    assert production.preview.commit == "a" * 40 and production.child.role == "rollback"
+    assert all(not p.dead for p in others)
+
+
 @pytest.mark.parametrize("fail_replacement", [False, True])
 def test_real_loopback_preview_swap_and_rollback_preserve_other_fixture_pids(tmp_path, fail_replacement):
     # Real process and HTTP behavior, using a tiny static test fixture, never

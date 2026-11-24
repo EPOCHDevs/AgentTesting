@@ -152,11 +152,13 @@ def probe(preview: Preview, child: Child, others: list[Child], timeout: float = 
 class Controller:
     def __init__(self, state: Path, preview: Preview, child: Child, children: list[Child],
                  stage: Callable[[str, str], Preview], start: Callable[[Preview, Path], Child],
-                 stop: Callable[[list[Child]], None], check=probe, guard: Callable[[], None] = lambda: None):
+                 stop: Callable[[list[Child]], None], check=probe, guard: Callable[[], None] = lambda: None,
+                 target_guard: Callable[[str], None] = lambda _: None):
         self.state, self.preview, self.children = state, preview, children
         self.child: Child | None = child
         self.stage, self.start, self.stop, self.check = stage, start, stop, check
         self.guard = guard
+        self.target_guard = target_guard
         self.pid, self.started = os.getpid(), process_start(os.getpid())
         self.status = "ready"
         self.last_result: tuple[str, dict] | None = None
@@ -183,6 +185,7 @@ class Controller:
 
     def refresh(self, commit: str, configuration: str, request_id: str) -> dict:
         self.guard()
+        self.target_guard(commit)
         if configuration != self.preview.configuration:
             raise ValueError("Portal-only refresh preserves current configuration; a configuration change needs a reviewed bootstrap.")
         if (commit, configuration) == (self.preview.commit, self.preview.configuration) and self.child:
@@ -204,6 +207,7 @@ class Controller:
             shadow = self._start(temporary, f"ui-preview-{request_id}.log")
             self.check(temporary, shadow, others)
             self.guard()
+            self.target_guard(commit)
             # The current UI is untouched until a separate preview is healthy.
             self._stop(self.child)
             self.child = None
@@ -211,6 +215,7 @@ class Controller:
                 replacement = self._start(candidate, f"ui-refresh-{request_id}.log")
                 validation = self.check(candidate, replacement, others)
                 self.guard()
+                self.target_guard(commit)
             except (ValueError, OSError, RuntimeError, httpx.HTTPError):
                 self._stop(replacement)
                 replacement = None

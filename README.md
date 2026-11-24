@@ -140,7 +140,10 @@ Read the current configuration hash and active bundle from
 `.artifacts/local-stack/ui-refresh-capability.json`. The primary Portal must be
 clean, on its expected branch, and at that exact qualified commit. The owner
 stages a separate immutable bundle and temporary loopback preview, checks the
-served index and module asset hashes, then replaces only its UI child. A bind or
+served index and module asset hashes, revalidates the clean exact source before
+publishing a build and immediately before stopping the old UI, then replaces
+only its UI child. A build-time source drift leaves an unpublished partial, so
+an explicit restored-source retry rebuilds it. A bind or
 readiness failure rolls back to the retained bundle; Backend, AI, Platform and
 the front door are not restarted. A failed acknowledgement write cannot repeat
 the swap. If a command times out, reconcile the saved request/result instead of
