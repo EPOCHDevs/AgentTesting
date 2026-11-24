@@ -1,5 +1,8 @@
 # AgentTesting
 
+**Current round:** [Fresh local scenarios](campaigns/product-local-20261123-round3/reports/dashboard.html) — [status table](campaigns/product-local-20261123-round3/reports/status.md). Previous rounds remain historical.
+
+
 A small workspace for testing research agents through realistic, multi-turn
 conversations and reviewing the evidence behind their results.
 
@@ -16,13 +19,11 @@ conversations and reviewing the evidence behind their results.
 
 Choose a scenario → have a conversation → collect evidence → review → record findings.
 
-Start with the [research situations](scenarios/README.md). The researcher reacts
-to actual answers; features exercised are recorded afterward. A separate reviewer checks the result.
-Plan campaign breadth and depth with the [workflow coverage programme](scenarios/coverage/README.md),
-including release prerequisites, meaningful variants and evidence requirements.
-Reviewers follow the [audit scope](AGENTS.md). Each attempt owns its records;
-a shared index can summarize them without competing
-writes. A completed conversation is not automatically a passing result.
+Use the [single campaign guide](scenarios/coverage/README.md) for the whole-product
+process, agent handoffs and dashboard. [catalog.json](scenarios/coverage/catalog.json)
+owns scenario definitions and criteria; campaign event logs own observations.
+The existing conversation runner below still collects evidence. A completed run
+is not automatically a passing journey.
 
 CLI, API and direct UI interaction are possible ways to drive a conversation.
 Notebooks are an optional way to run or review it.
@@ -93,6 +94,22 @@ Platform runs its general service in local mode (`EPOCH_FILES_LOCAL_ROOT`): no A
 account, with its objects and records in Backend's `personal_content` directory
 (`.artifacts/local-stack/backend/personal_content`), where the engine's local job
 store reads saved datasets, so a dataset saved locally is a local study input.
+The front door also sends engine reference and discovery routes to Platform. Reference files come
+from the primary engine's `epoch_reference_files` exporter, not another environment. Build that
+target once alongside the server; the launcher exports a fresh immutable generation before startup
+and Platform verifies its files against the exported manifest. New engine references require a stack
+restart. The launcher still does not compile C++ or install dependencies.
+Discovery optionally uses `EPOCH_DISCOVERY_GDS_URL` and `EPOCH_DISCOVERY_SERVICE_TOKEN`
+from the primary `EpochPlatform/.env.local`. Supply both to use the shared GDS catalogue;
+the launcher sends observation previews to the local engine and keeps selections on local disk.
+Other settings in that file are not inherited. Keep the file private and untracked.
+Asset metadata, logo selection and image routes also go to Platform. Configure
+`EPOCH_IDENTITY_GDS_URL` and `EPOCH_IDENTITY_GDS_TOKEN` together in the same private
+file to use GDS identity delivery. This credential is independent of discovery;
+it stays on Platform and is never passed to Backend, the agent or the browser.
+The launcher does not retrieve credentials or substitute external image URLs.
+Studio connections use the same Cognito Authorization header as ordinary local agent requests;
+the generated configuration requires custom authentication for Studio too.
 Files uploaded through Backend's former local Files are not carried over. The
 agent's Files workers use the front door with the shared worker token, which goes
 to Platform, not Backend.
@@ -248,10 +265,10 @@ versions for each submission. Selecting a stack does not deploy a product branch
 ```bash
 # Supply EPOCH_TOKEN through your existing Epoch login; do not commit it.
 .venv/bin/python -m tools.agent_testing check
-.venv/bin/python -m tools.agent_testing ask industrial-01 --key opening --owner researcher-a \
-  --scenario industrial-resilience "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which business looks better able to withstand a slowdown in customer orders, and what makes you think so?"
-.venv/bin/python -m tools.agent_testing pull industrial-01 --follow
-.venv/bin/python -m tools.agent_testing status industrial-01
+.venv/bin/python -m tools.agent_testing ask conversation-01 --key opening --owner journey-chat \
+  --scenario CV01 "I'm comparing Fastenal and MSC Industrial for a long-term watchlist. Which business looks better able to withstand a slowdown in customer orders, and what makes you think so?"
+.venv/bin/python -m tools.agent_testing pull conversation-01 --follow
+.venv/bin/python -m tools.agent_testing status conversation-01
 ```
 
 Read the returned answer before choosing a follow-up. Another `ask` with a new
@@ -266,7 +283,7 @@ data. Raw diagnostic artifacts remain private under `.artifacts/`.
 
 For a clarification, `status` shows the current interrupt IDs and payloads. Write
 a local JSON file mapping the selected IDs to their explicit response payloads,
-then use `answer industrial-01 --key clarification-1 --responses /path/to/answers.json`.
+then use `answer conversation-01 --key clarification-1 --responses /path/to/answers.json`.
 No option is selected automatically.
 
 `pull` saves the server conversation; `pull --follow` also captures a resumable
