@@ -1,6 +1,6 @@
 # Optional settings: copy to local-stack.toml (ignored).
 # Product paths are fixed to sibling primary repositories:
-# EpochBackend (main), EpochAI (dev), EpochClientPortal (dev).
+# EpochBackend, EpochAI and EpochClientPortal on main; EpochPlatform on dev.
 # The Backend executable is EpochBackend/build/bin/epoch_stratifyx_server.
 # Worktree/path overrides are not enabled.
 # Directory containing Node 24+, when it is not already on PATH:
@@ -8,3 +8,11 @@
 # Local Markets pages are off by default because the local stack shares the
 # production Barchart quota. Opt in (requires a Calendar-enabled Backend):
 # market_pages = true
+# Public web research (with EXA_API_KEY in EpochAI's .env) and document URL
+# capture are on automatically. AWS document reading (PDF, images, DOCX) is off
+# unless you name a us-east-1 documents bucket and an AWS profile for its account.
+# The `up` agent mounts only ~/.aws/config and ~/.aws/sso/cache, read-only.
+# [documents]
+# aws_profile = "epoch-dev-admin"
+# account_id = "089340568327"
+# bucket = "epoch-dev-documents-089340568327"

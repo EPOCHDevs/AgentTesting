@@ -1,14 +1,17 @@
-"""Start the three local services; Ctrl+C stops only these child processes."""
+"""Start the local services; Ctrl+C stops only these child processes."""
 
 import argparse
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -18,19 +21,26 @@ from urllib.parse import urlsplit
 import httpx
 from dotenv import dotenv_values
 
-from tools.agent_testing import Stack, check_stack
-from tools.local_auth import CLIENT, POOL, REGION, cached_token, login, token_path
+from tools.agent_testing import CONTAINER_HOST, Stack, check_stack
+from tools.local_auth import CLI_CLIENT, CLIENT, POOL, REGION, cached_token, login, token_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Backend, AI and the Portal integrate on main; Epoch Platform integrates on dev.
 PROJECT_BRANCHES = {
     "EpochBackend": "main",
-    "EpochAI": "dev",
-    "EpochClientPortal": "dev",
+    "EpochAI": "main",
+    "EpochClientPortal": "main",
+    "EpochPlatform": "dev",
 }
+# Behind the front door at the profile's backend_url, as behind api.<env>.epoch.trade's load
+# balancer: Backend, and Epoch Platform's general service for Files and Space.
+BACKEND_PORT = 9010
+PLATFORM_PORT = 9020
+FRONT_DOOR = Path(__file__).resolve().parent / "front_door.py"
 
 
 def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
-    """The default stack always uses the three primary sibling repositories."""
+    """The default stack always uses the primary sibling repositories."""
     config = tomllib.loads(config_file.read_text()) if config_file.exists() else {}
     paths = {
         "backend_binary": PROJECT_ROOT
@@ -38,8 +48,9 @@ def primary_paths(config_file: Path) -> tuple[dict, dict[str, Path]]:
         "backend_env": PROJECT_ROOT / "EpochBackend/services/stratifyx/.env.local",
         "ai_dir": PROJECT_ROOT / "EpochAI",
         "ui_dir": PROJECT_ROOT / "EpochClientPortal",
+        "platform_dir": PROJECT_ROOT / "EpochPlatform",
     }
-    unknown = set(config) - set(paths) - {"node_bin", "market_pages"}
+    unknown = set(config) - set(paths) - {"node_bin", "market_pages", "documents"}
     if unknown:
         raise ValueError(
             f"Unknown local launcher settings: {', '.join(sorted(unknown))}"
@@ -94,25 +105,33 @@ def configure_market_pages(
         for plugin in document.get("plugins", [])
         if plugin.get("name") == "epoch_stratifyx::server::MiPageRuntimeService"
     ]
-    if len(plugins) != 1:
+    if not plugins and enabled:
+        raise ValueError(
+            "This Backend no longer hosts Markets page refresh. "
+            "Keep market_pages=false; page production is owned by Epoch Platform."
+        )
+    if len(plugins) > 1:
         raise ValueError(
             "The primary Backend runtime must have exactly one MiPageRuntimeService."
         )
-    options = plugins[0].setdefault("config", {})
-    if not isinstance(options, dict):
-        raise ValueError("The Backend MI configuration must be an object.")
-    calendar = options.setdefault("calendar", {})
-    if not isinstance(calendar, dict):
-        raise ValueError("The Backend Calendar configuration must be an object.")
-    calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
-    fd, temporary = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(document, stream, indent=2)
-            stream.write("\n")
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    # ENG-2946 retired this plugin. Disabled refresh needs no replacement plugin
+    # or runtime edit; older Backend versions still receive their explicit pause.
+    if plugins:
+        options = plugins[0].setdefault("config", {})
+        if not isinstance(options, dict):
+            raise ValueError("The Backend MI configuration must be an object.")
+        calendar = options.setdefault("calendar", {})
+        if not isinstance(calendar, dict):
+            raise ValueError("The Backend Calendar configuration must be an object.")
+        calendar.update(enabled=enabled, refresh_mode="automatic" if enabled else "paused")
+        fd, temporary = tempfile.mkstemp(dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump(document, stream, indent=2)
+                stream.write("\n")
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
     flag = "1" if enabled else "0"
     batch = (
         # Every deployed environment uses 128 (epoch-terraform #146). The
@@ -192,6 +211,389 @@ def private_dir(path: Path) -> Path:
     return path.resolve()
 
 
+def write_private(path: Path, text: str) -> None:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(text)
+
+
+# `langgraph up` builds from EpochAI's own directory, so its generated config,
+# env file and compose override live there, excluded from `git status` locally.
+UP_CONFIG, UP_ENV, UP_COMPOSE = (
+    "langgraph-up.local.json",
+    ".env.up.local",
+    "docker-compose.up.local.yml",
+)
+CONTAINER_PORT = 8000  # langgraph-api's port inside its container
+WORKER_TOKEN = "EPOCH_DOCUMENT_WORKER_TOKEN"
+
+
+def source_access(
+    state: Path, api_url: str, backend_values: dict[str, str], ai_values: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Enable public web research and document URL capture for a local stack.
+
+    Platform's Files and the agent's Files workers share one private worker token,
+    kept across restarts. The agent reaches Files, and the workers their routes,
+    through the local API origin's front door. Web research also needs Exa and a
+    recovery journal; the agent is the single executor, so a private directory
+    serves. AWS document reading (PDF, images, DOCX) stays off unless its own
+    settings are configured."""
+    token = backend_values.get(WORKER_TOKEN) or ai_values.get(WORKER_TOKEN)
+    if not token:
+        path = state / "document-worker-token"
+        if not path.is_file():
+            write_private(path, secrets.token_urlsafe(48))
+        token = path.read_text().strip()
+    ai = {WORKER_TOKEN: token}
+    if ai_values.get("EXA_API_KEY") and "EPOCH_WEB_RESEARCH_ENABLED" not in ai_values:
+        ai["EPOCH_WEB_RESEARCH_ENABLED"] = "true"
+        ai["EPOCH_WEB_RESEARCH_JOURNAL"] = str(private_dir(state / "ai/web-journal"))
+    # Operator settings win, except the token Platform must share and where Files is:
+    # an agent .env naming another environment's Files must not split a local run.
+    files = {"EPOCH_DOCUMENT_BACKEND_URL": api_url, "EPOCH_FILES_WORKER_URL": api_url}
+    return {WORKER_TOKEN: token}, {**ai, **ai_values, WORKER_TOKEN: token, **files}
+
+
+DOCUMENT_SETTINGS = ("aws_profile", "account_id", "bucket")
+CONTAINER_AWS = "/root/.aws"  # The agent image runs as root.
+
+
+def document_access(settings: dict) -> dict[str, str]:
+    """AWS document reading (PDF, images, DOCX) through Bedrock Data Automation.
+
+    Off unless local-stack.toml has a [documents] table naming the AWS profile,
+    its account and the private us-east-1 bucket that stages documents."""
+    if not settings:
+        return {}
+    if set(settings) != set(DOCUMENT_SETTINGS):
+        raise ValueError(f"[documents] needs exactly: {', '.join(DOCUMENT_SETTINGS)}")
+    account = str(settings["account_id"])
+    return {
+        "EPOCH_DOCUMENT_PREPARATION_ENABLED": "true",
+        "EPOCH_DOCUMENT_AWS_BUCKET": settings["bucket"],
+        "EPOCH_DOCUMENT_AWS_ACCOUNT_ID": account,
+        "EPOCH_DOCUMENT_BDA_PROFILE_ARN": (
+            f"arn:aws:bedrock:us-east-1:{account}:data-automation-profile/us.data-automation-v1"
+        ),
+        "AWS_PROFILE": settings["aws_profile"],
+    }
+
+
+def check_document_access(env: dict[str, str], base: dict[str, str]) -> None:
+    """Fail before launch, as the agent refuses to start without its AWS access."""
+    if env.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") != "true":
+        return
+    profile, bucket = env["AWS_PROFILE"], env["EPOCH_DOCUMENT_AWS_BUCKET"]
+    aws = shutil.which("aws", path=base.get("PATH"))
+    if not aws:
+        raise ValueError("Document reading needs the AWS CLI to check its access.")
+
+    def call(*args: str) -> str:
+        done = subprocess.run(
+            [aws, *args, "--profile", profile, "--output", "text"],
+            env=base, capture_output=True, text=True, timeout=60,
+        )
+        if done.returncode:
+            raise ValueError(
+                f"Document reading cannot use AWS profile {profile}. "
+                f"Sign in with: aws sso login --profile {profile}"
+            )
+        return done.stdout.strip()
+
+    if call("sts", "get-caller-identity", "--query", "Account") != env["EPOCH_DOCUMENT_AWS_ACCOUNT_ID"]:
+        raise ValueError(f"AWS profile {profile} is not the configured document account.")
+    region = call(
+        "s3api", "get-bucket-location", "--bucket", bucket,
+        "--expected-bucket-owner", env["EPOCH_DOCUMENT_AWS_ACCOUNT_ID"],
+        "--query", "LocationConstraint",
+    )
+    if region not in ("None", "us-east-1"):
+        raise ValueError(f"Document bucket {bucket} is in {region}; it must be in us-east-1.")
+
+
+def aws_mounts(env: dict[str, str], base: dict[str, str]) -> list[tuple[str, str]]:
+    """The profile config and SSO sign-in cache, read-only, for document reading."""
+    if env.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") != "true":
+        return []
+    home = Path(base.get("HOME", Path.home())) / ".aws"
+    config = Path(base.get("AWS_CONFIG_FILE", home / "config"))
+    return [
+        (str(config), f"{CONTAINER_AWS}/config"),
+        (str(home / "sso/cache"), f"{CONTAINER_AWS}/sso/cache"),
+    ]
+
+
+def up_container_env(values: dict[str, str]) -> tuple[dict[str, str], list[str], list[str]]:
+    """Point the agent's local env at the host from its container.
+
+    Returns the env, the host directories it names to mount read-only, and the
+    web recovery journal to mount writable."""
+    env = dict(values)
+    # The document and web workers stay on their loopback origin; a relay serves it.
+    for key in ("EPOCH_BACKEND_URL", "EPOCH_CAMPAIGN_SERVER"):
+        parts = urlsplit(env[key])
+        env[key] = parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
+    for key in ("EPOCH_AI_URL", "LANGGRAPH_API_URL"):
+        env[key] = f"http://localhost:{CONTAINER_PORT}"
+    env.pop("POSTGRES_URI", None)  # `up` brings its own Postgres.
+    journal = env.get("EPOCH_WEB_RESEARCH_JOURNAL", "")
+    writable = [journal] if journal.startswith("/") and Path(journal).is_dir() else []
+    mounts = sorted(
+        {
+            value
+            for value in env.values()
+            if value.startswith(f"{PROJECT_ROOT}/") and Path(value).is_dir()
+        }
+        - set(writable)
+    )
+    return env, mounts, writable
+
+
+def env_file_text(env: dict[str, str]) -> str:
+    # Single quotes keep Compose from interpolating or unescaping secret values.
+    for key, value in env.items():
+        if "'" in value or "\n" in value:
+            raise ValueError(f"{key} cannot be written to the container env file.")
+    return "".join(f"{key}='{value}'\n" for key, value in sorted(env.items()))
+
+
+RELAY = Path(__file__).resolve().parent / "loopback_forward.py"
+
+
+def loopback_port(env: dict[str, str]) -> int | None:
+    """The Backend port the workers expect on the container's own loopback."""
+    parts = urlsplit(env.get("EPOCH_DOCUMENT_BACKEND_URL", ""))
+    if parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1"):
+        return parts.port
+    return None
+
+
+def up_compose_override(
+    mounts: list[str],
+    writable: list[str] = (),
+    image: str = "",
+    relay_port: int | None = None,
+    mapped: list[tuple[str, str]] = (),
+) -> str:
+    lines = [
+        "services:",
+        "  langgraph-api:",
+        "    extra_hosts:",
+        f'      - "{CONTAINER_HOST}:host-gateway"',
+    ]
+    if mounts or writable or mapped:
+        lines.append("    volumes:")
+        lines += [f'      - "{mount}:{mount}:ro"' for mount in mounts]
+        lines += [f'      - "{mount}:{mount}"' for mount in writable]
+        lines += [f'      - "{host}:{container}:ro"' for host, container in mapped]
+    if relay_port:
+        # Shares the agent's network, so its loopback reaches the host Backend.
+        lines += [
+            "  backend-loopback:",
+            f'    image: "{image}"',
+            '    network_mode: "service:langgraph-api"',
+            f'    entrypoint: ["python", "{RELAY}", "{relay_port}", "{CONTAINER_HOST}"]',
+            "    volumes:",
+            f'      - "{RELAY}:{RELAY}:ro"',
+            "    restart: unless-stopped",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def exclude_locally(repo: Path, names: tuple[str, ...]) -> None:
+    """Keep generated files out of `git status` without editing tracked ignores."""
+    path = Path(
+        subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],
+            text=True,
+        ).strip()
+    )
+    path = path if path.is_absolute() else repo / path
+    existing = path.read_text().splitlines() if path.exists() else []
+    missing = [name for name in names if name not in existing]
+    if missing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as stream:
+            stream.write("".join(f"{name}\n" for name in missing))
+
+
+def up_project(ai: Path) -> str:
+    return ai.name.lower()  # Compose's project name for EpochAI's directory.
+
+
+def prepare_up(
+    ai: Path,
+    langgraph: Path,
+    values: dict[str, str],
+    stack: Stack,
+    port: int,
+    commit: str,
+    state: Path,
+    base: dict[str, str],
+) -> tuple:
+    if not shutil.which("docker", path=base.get("PATH")):
+        raise ValueError("The up runtime needs Docker on PATH.")
+    env, mounts, writable = up_container_env(values)
+    graph_config = json.loads((ai / "langgraph.json").read_text())
+    graph_config["env"] = UP_ENV
+    # One image per EpochAI commit; the default builder avoids a stale buildx one.
+    image = f"epoch-ai-up:{commit[:12]}"
+    write_private(ai / UP_ENV, env_file_text(env))
+    write_private(ai / UP_CONFIG, json.dumps(graph_config, indent=2))
+    write_private(
+        ai / UP_COMPOSE,
+        up_compose_override(mounts, writable, image, loopback_port(env), aws_mounts(env, base)),
+    )
+    exclude_locally(ai, (UP_CONFIG, UP_ENV, UP_COMPOSE))
+    up_env = {**base, "BUILDX_BUILDER": "default"}
+    if subprocess.run(
+        ["docker", "image", "inspect", image], env=up_env, capture_output=True
+    ).returncode:
+        log = state / "ai-build.log"
+        print(f"Building agent image {image}; log: {log}", flush=True)
+        with os.fdopen(
+            os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+        ) as stream:
+            built = subprocess.run(
+                [str(langgraph), "build", "-c", UP_CONFIG, "-t", image],
+                cwd=ai,
+                env=up_env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+            )
+        if built.returncode:
+            raise ValueError(f"The agent image build failed. Inspect {log}.")
+    command = [
+        str(langgraph),
+        "up",
+        "-c",
+        UP_CONFIG,
+        "-p",
+        str(port),
+        "-d",
+        UP_COMPOSE,
+        "--image",
+        image,
+        "--recreate",
+        "--no-pull",
+    ]
+    return ("AI", command, ai, up_env, stack.ai_url + "/ok")
+
+
+# Vite reads these files in production mode too; a change to them changes the bundle.
+UI_ENV_FILES = (".env", ".env.local", ".env.production", ".env.production.local")
+
+
+def prepare_ui_build(
+    ui: Path,
+    corepack: str,
+    ui_env: dict[str, str],
+    stack: Stack,
+    port: int,
+    commit: str,
+    state: Path,
+) -> tuple:
+    """The Portal's production bundle, served by `vite preview`, as a deployment serves it.
+
+    One bundle per EpochClientPortal commit and configuration, kept between restarts, as the
+    agent keeps one image per EpochAI commit. The agent's CORS list does not include this
+    origin, so the bundle talks to it through the same /lg-api proxy the dev server uses;
+    `vite preview` applies vite.config.ts's proxy, targeting the real agent URL.
+    """
+    origin = stack.ui_url.rstrip("/")
+    build_env = {**ui_env, "VITE_LANGGRAPH_API_URL": f"{origin}/lg-api"}
+    configuration = hashlib.sha256()
+    for key in sorted(k for k in build_env if k.startswith("VITE_")):
+        configuration.update(f"{key}={build_env[key]}\n".encode())
+    for name in UI_ENV_FILES:
+        if (ui / name).is_file():
+            configuration.update(name.encode() + b"\0" + (ui / name).read_bytes())
+    builds = private_dir(state / "ui-builds")
+    bundle = builds / f"{commit[:12]}-{configuration.hexdigest()[:12]}"
+    if not (bundle / "index.html").is_file():
+        partial = bundle.with_name(bundle.name + ".partial")
+        shutil.rmtree(partial, ignore_errors=True)
+        log = state / "ui-build.log"
+        print(f"Building UI bundle {bundle.name}; log: {log}", flush=True)
+        with os.fdopen(
+            os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+        ) as stream:
+            built = subprocess.run(
+                [corepack, "pnpm", "exec", "vite", "build", "--outDir", str(partial),
+                 "--emptyOutDir"],
+                cwd=ui,
+                env=build_env,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+            )
+        if built.returncode or not (partial / "index.html").is_file():
+            raise ValueError(f"The UI build failed. Inspect {log}.")
+        partial.rename(bundle)
+        # Older bundles are never served again.
+        for old in builds.iterdir():
+            if old != bundle:
+                shutil.rmtree(old, ignore_errors=True)
+    command = [
+        corepack, "pnpm", "exec", "vite", "preview", "--outDir", str(bundle),
+        "--host", "127.0.0.1", "--port", str(port), "--strictPort",
+    ]
+    return ("UI", command, ui, ui_env, stack.ui_url)
+
+
+def prepare_platform(
+    platform: Path,
+    node: str,
+    base: dict[str, str],
+    backend_values: dict[str, str],
+    files_access: dict[str, str],
+    project: Path,
+    commit: str,
+    state: Path,
+) -> tuple:
+    """Epoch Platform's general service, with Files and Space on local disk and no AWS account.
+
+    Files keeps its objects in the engine's personal content directory, where the local job store
+    reads saved datasets, and names studies from the engine's local definitions. The checkout's
+    TypeScript is compiled in place first (incremental; Git ignores the output)."""
+    log = state / "platform-build.log"
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        built = subprocess.run(
+            [node, "node_modules/typescript/bin/tsc", "-b"],
+            cwd=platform, env=base, stdout=stream, stderr=subprocess.STDOUT,
+        )
+    if built.returncode or not (platform / "apps/platform/dist/main.js").is_file():
+        raise ValueError(f"The Platform build failed. Inspect {log}.")
+    # No AWS credentials reach it: local Files must never fall back to a cloud store.
+    env = {key: value for key, value in base.items() if not key.startswith("AWS_")}
+    env.update({
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "AWS_EC2_METADATA_DISABLED": "true",
+        "AWS_REGION": REGION,
+        "EPOCH_PLATFORM_ROLE": "general",
+        "EPOCH_ENVIRONMENT": "local",
+        "EPOCH_PLATFORM_REVISION": commit,
+        "PORT": str(PLATFORM_PORT),
+        "COGNITO_USER_POOL_ID": POOL,
+        "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
+        "EPOCH_FILES_LOCAL_ROOT": str(project / "personal_content"),
+        "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
+        **files_access,
+    })
+    issuer = backend_values.get("EPOCH_TOKEN_ISSUER", "").strip()
+    if issuer:
+        # Delegated tokens from the local v1 host, which the local Backend signs.
+        env["EPOCH_TOKEN_ISSUER"] = issuer
+        env["EPOCH_TOKEN_JWKS_URL"] = f"http://127.0.0.1:{BACKEND_PORT}/api/v1/auth/jwks"
+    return (
+        "Platform",
+        [node, "apps/platform/dist/main.js"],
+        platform,
+        env,
+        f"http://127.0.0.1:{PLATFORM_PORT}/api/v1/platform/health",
+    )
+
+
 def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"Missing service environment file: {path}")
@@ -209,11 +611,21 @@ def local_ports(stack: Stack) -> list[int]:
             or parts.port is None
         ):
             raise ValueError(
-                "The launcher requires explicit localhost HTTP ports in [local]."
+                "The launcher requires explicit localhost HTTP ports in the local profile."
             )
         ports.append(parts.port)
     if len(set(ports)) != 3:
         raise ValueError("Backend, AI and UI need three distinct ports.")
+    return ports
+
+
+def service_ports(stack: Stack) -> list[int]:
+    """The profile's ports and the two behind the front door."""
+    ports = local_ports(stack) + [BACKEND_PORT, PLATFORM_PORT]
+    if len(set(ports)) != len(ports):
+        raise ValueError(
+            f"Ports {BACKEND_PORT} and {PLATFORM_PORT} are reserved for Backend and Platform behind the front door."
+        )
     return ports
 
 
@@ -229,7 +641,13 @@ def check_ports(ports: list[int]) -> None:
                 ) from None
 
 
-def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
+def prepare(
+    config_file: Path,
+    stack: Stack,
+    state: Path,
+    ai_runtime: str = "dev",
+    ui_runtime: str = "dev",
+) -> list[tuple]:
     config, paths = primary_paths(config_file)
     revisions = verify_primary_checkouts()
     for name, revision in revisions.items():
@@ -238,6 +656,7 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             flush=True,
         )
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
+    platform = paths["platform_dir"]
     langgraph = ai / ".venv/bin/langgraph"
     for executable in (binary, langgraph):
         if not os.access(executable, os.X_OK):
@@ -246,7 +665,9 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             )
     if not (ui / "node_modules").is_dir():
         raise ValueError(f"Install UI dependencies with pnpm in {ui} first.")
-    ports = local_ports(stack)
+    if not (platform / "node_modules/typescript").is_dir():
+        raise ValueError(f"Install Platform dependencies with pnpm in {platform} first.")
+    ports = service_ports(stack)
     # Do not pass the caller's token or password to any server.
     base = {
         k: v
@@ -304,14 +725,16 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "COGNITO_REGION": REGION,
         "COGNITO_USER_POOL_ID": POOL,
         "COGNITO_CLIENT_ID": CLIENT,
-        "COGNITO_CLIENT_IDS": CLIENT,
+        # The Portal's client, and `epoch login`'s, whose ID tokens /v1/auth/token exchanges.
+        "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
     }
     backend_values = read_env(paths["backend_env"])
     backend_env = {
         **base,
         **backend_values,
         **common,
-        "PORT": str(ports[0]),
+        "EPOCH_GIT_SHA": revisions["EpochBackend"]["commit"],
+        "PORT": str(BACKEND_PORT),
         "EPOCH_SKIP_LOAD_JOBS": "0",
         "EPOCH_PROJECT_DIR": str(private_dir(state / "backend")),
         "EPOCH_JOB_STAGING_DIR": str(private_dir(state / "backend/staging")),
@@ -334,12 +757,39 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
     revision = ai_values.get("EPOCH_COMMENTARY_DEPLOYMENT_REVISION", "").strip()
     if not revision:
         revision = "local-" + revisions["EpochAI"]["commit"]
-    ai_values = {**ai_values, "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision}
+    ai_values = {
+        **ai_values,
+        "EPOCH_COMMENTARY_DEPLOYMENT_REVISION": revision,
+        # Saved cloud metadata in a local .env does not identify this process.
+        "LANGSMITH_LANGGRAPH_GIT_REF": revisions["EpochAI"]["branch"],
+        "LANGSMITH_LANGGRAPH_GIT_REF_SHA": revisions["EpochAI"]["commit"],
+    }
     revisions["EpochAI"]["commentary_deployment_revision"] = revision
+    files_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
+    ai_values = {**ai_values, **document_access(config.get("documents", {}))}
+    check_document_access(ai_values, base)
+    print(
+        "Web research: "
+        + ("on" if ai_values.get("EPOCH_WEB_RESEARCH_ENABLED", "").lower() in ("1", "true") else "off")
+        + "; document URL capture: on; AWS document reading: "
+        + ("on" if ai_values.get("EPOCH_DOCUMENT_PREPARATION_ENABLED") == "true" else "off"),
+        flush=True,
+    )
+    platform_service = prepare_platform(
+        platform, node, base, backend_values, files_access,
+        Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state,
+    )
+    print(
+        "Files and Space: Epoch Platform, on local disk in "
+        f"{platform_service[3]['EPOCH_FILES_LOCAL_ROOT']}",
+        flush=True,
+    )
     (state / "source-checkouts.json").write_text(json.dumps(revisions, indent=2))
     print(f"Local commentary deployment: {revision}", flush=True)
-    ai_env = {**base, **ai_values, **common}
-    graph_config["env"] = {**ai_values, **common}
+    # The agent publishes `epoch login`'s client in its protected resource metadata.
+    sign_in = {"EPOCH_SIGN_IN_CLIENT_ID": CLI_CLIENT}
+    ai_env = {**base, **ai_values, **common, **sign_in}
+    graph_config["env"] = {**ai_values, **common, **sign_in}
     graph_config["dependencies"] = [
         str(ai / dep) if dep.startswith(".") else dep
         for dep in graph_config.get("dependencies", [])
@@ -375,15 +825,19 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
         "VITE_COGNITO_USER_POOL_ID": POOL,
         "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT,
     }
-    return [
-        (
-            "Backend",
-            [str(binary), "--port", str(ports[0])],
-            state / "backend",
-            backend_env,
-            stack.backend_url + "/api/v1/health",
-        ),
-        (
+    ai_service = (
+        prepare_up(
+            ai,
+            langgraph,
+            {**ai_values, **common},
+            stack,
+            ports[1],
+            revisions["EpochAI"]["commit"],
+            state,
+            base,
+        )
+        if ai_runtime == "up"
+        else (
             "AI",
             [
                 str(langgraph),
@@ -400,8 +854,31 @@ def prepare(config_file: Path, stack: Stack, state: Path) -> list[tuple]:
             ai_state,
             ai_env,
             stack.ai_url + "/ok",
-        ),
+        )
+    )
+    return [
         (
+            "Backend",
+            [str(binary), "--port", str(BACKEND_PORT)],
+            state / "backend",
+            backend_env,
+            f"http://127.0.0.1:{BACKEND_PORT}/api/v1/health",
+        ),
+        platform_service,
+        (
+            "FrontDoor",
+            [sys.executable, str(FRONT_DOOR), str(ports[0]), str(BACKEND_PORT), str(PLATFORM_PORT)],
+            state,
+            base,
+            stack.backend_url + "/api/v1/platform/health",
+        ),
+        ai_service,
+        prepare_ui_build(
+            ui, corepack, ui_env, stack, ports[2],
+            revisions["EpochClientPortal"]["commit"], state,
+        )
+        if ui_runtime == "build"
+        else (
             "UI",
             [
                 corepack,
@@ -479,6 +956,20 @@ def main() -> None:
     parser.add_argument(
         "--login", action="store_true", help="Replace the cached local login"
     )
+    parser.add_argument(
+        "--ai-runtime",
+        choices=("dev", "up"),
+        default="dev",
+        help="Agent server: `langgraph dev` on the local profile (2024), or the "
+        "licensed `langgraph up` server with parallel runs on local-up (2124)",
+    )
+    parser.add_argument(
+        "--ui-runtime",
+        choices=("build", "dev"),
+        default="build",
+        help="Portal: its production bundle served by `vite preview` (built once per commit), "
+        "or the `vite` dev server with hot reload",
+    )
     args = parser.parse_args()
     children = []
     state = private_dir(Path(".artifacts/local-stack"))
@@ -488,9 +979,11 @@ def main() -> None:
         except BlockingIOError:
             parser.exit(1, "The local launcher is already running.\n")
         try:
-            stack = Stack.load(args.environments, "local")
-            check_ports(local_ports(stack))
-            services = prepare(args.config, stack, state)
+            stack = Stack.load(
+                args.environments, "local-up" if args.ai_runtime == "up" else "local"
+            )
+            check_ports(service_ports(stack))
+            services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime)
             bearer = (
                 login(args.email)
                 if args.login or not token_path().exists()
@@ -511,14 +1004,16 @@ def main() -> None:
                     )
                 children.append(child)
                 print(f"Starting {name}; log: {log}", flush=True)
-                wait_ready(url, children, 180)
+                # The up server imports the graphs inside its container first.
+                up_agent = name == "AI" and args.ai_runtime == "up"
+                wait_ready(url, children, 420 if up_agent else 180)
             receipt = asyncio.run(check_stack(stack, "Bearer " + bearer))
             (state / "health.json").write_text(
                 json.dumps(receipt, indent=2, default=str)
             )
             print(
                 f"Ready: {stack.ui_url}\nLocal CLI login is cached. Browser login uses the same account.\n"
-                "Ctrl+C stops these three services. No research has been started.",
+                "Ctrl+C stops these services. No research has been started.",
                 flush=True,
             )
             while all(child.poll() is None for child in children):
@@ -530,6 +1025,13 @@ def main() -> None:
             parser.exit(1, f"{exc}\n")
         finally:
             stop(children)
+            if args.ai_runtime == "up":
+                # Compose may leave the containers if `langgraph up` stopped early.
+                ai_dir = primary_paths(args.config)[1]["ai_dir"]
+                subprocess.run(
+                    ["docker", "compose", "-p", up_project(ai_dir), "down", "--remove-orphans"],
+                    capture_output=True,
+                )
 
 
 if __name__ == "__main__":

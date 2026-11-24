@@ -1,0 +1,103 @@
+# Export end-to-end fixture: a written-up (authored) dashboard with literal briefings,
+# an executive summary, an anchored note, category headings, snapshot cards, a
+# relationship graph, gauge endpoint labels, radar, treemap, a world-map heatmap and
+# interval, waterfall and pie-presented bars. Copied unchanged from EpochBackend
+# services/stratifyx/test/integration/study_integration/scenarios/skill_validation/
+# reporters_shared/native_dashboard_reporters_happy.h (main 34fc30008d), whose test
+# proves the literal briefings never invoke generated text. Source-free, research-only
+# and without llm_call, so a run reads no vendor data and makes no model call.
+# >>>skill cards/label_numeric_endpoints
+gauge(category="Regime", min=-1.0, max=1.0,
+      min_label="Bear steepener", max_label="Bull flattener")(values=0.62)
+# <<<skill
+
+# >>>skill cards/show_radar_profiles
+radar(category="Profiles", axis_ids=["growth", "value", "momentum"],
+      axis_mins=[0, 0, 0], axis_maxs=[100, 100, 100],
+      series_ids=["AAPL-Stocks"], by_formats=[AssetFormat])(
+    key=("value", "momentum", "growth"),
+    by=("AAPL-Stocks", "AAPL-Stocks", "AAPL-Stocks"), values=(20, 30, 40))
+# <<<skill
+
+# >>>skill cards/render_authored_hierarchy
+treemap(category="Holdings", title="One holding", label_format=AssetFormat,
+        allow_drill=True)(key="holding-1", values=("AAPL-Stocks", "", 5.0, 0.02, 0))
+# <<<skill
+
+# >>>skill cards/write_structured_briefings
+briefing(name="method-note", title="Method", category="Overview", marker="None",
+    content_role=Guide, items=["The measures use the declared observations.",
+           "This view retains the recorded source values."])
+briefing(name="executive-summary", summary=True,
+    question="What does this view contain?", scope="The declared scenario observations.",
+    items=["The view reports the supplied scenario values."])
+# <<<skill
+
+# >>>skill cards/name_category_headings
+category_header(subtitle="Authored scenario")(
+    key="Regime", values="Regime overview")
+# <<<skill
+
+# A separate gauge fixture; the anchor recipe does not construct a gauge.
+gauge(category="Regime", title="Regime score", exhibit_id="regime-score",
+    min=-1.0, max=1.0)(values=0.62)
+
+# >>>skill bars/plot_supplied_intervals
+bar(category="Intervals", exhibit_id="supplied-intervals")(
+    key=["Alpha", "Beta"], values=(0.2, 0.3),
+    low_values=(0.1, 0.2), high_values=(0.3, 0.4))
+# <<<skill
+
+# >>>skill bars/present_saved_contributions
+bar(category="Contributions", exhibit_id="signed-contributions", presentation=Waterfall)(
+    key=["Gain", "Cost"], values=(5.0, -2.0))
+bar(category="Composition", exhibit_id="positive-contributions", presentation=Pie)(
+    key=["Alpha", "Beta"], values=(2.0, 3.0))
+# <<<skill
+
+# >>>skill cards/anchor_visual_commentary
+briefing(name="contribution-interpretation", title="Gains exceed costs", category="Contributions",
+    content_role=Primary, anchor_chart_id="signed-contributions", placement="Right", anchor_order=0,
+    items=["The recorded contributions leave a positive net balance."])
+# <<<skill
+
+# >>>skill reporters_shared/attach_computed_metrics
+card(category="Evidence", exhibit_id="sample-count",
+    layout=CardLayout(cells=[ColumnSpec(type=DecimalFormat, dp=0)]))(
+    key="Observations", values=(2.0,))
+bar(category="Evidence", exhibit_id="observations",
+    footer=DashboardMetricLayout(groups=[DashboardMetricGroup(primary=DashboardMetricRef(
+        category="Evidence", table_id="sample-count", card_index=0))]))(
+    key=["Alpha", "Beta"], values=(0.2, 0.3))
+# <<<skill
+
+# >>>skill cards/draw_explicit_relationships
+graph_nodes(graph_id="links", title="Relationships", category="Overview", label_format=AssetFormat)(
+    key="apple", values="AAPL-Stocks")
+graph_nodes(graph_id="links", title="Relationships", category="Overview", label_format=AssetFormat)(
+    key="nvidia", values="NVDA-Stocks")
+graph(graph_id="links", title="Relationships", category="Overview")(
+    key="apple", by="nvidia", values=0.6)
+# <<<skill
+
+# >>>skill cards/show_snapshot_cards
+snapshot_card(title="Benchmarks", collection_id="benchmarks", as_of="2026-09-27",
+    layout=SnapshotLayout(cards=[SnapshotCardStyle(
+        id="spx", title="S&P 500", primary_format=DecimalFormat,
+        primary_dp=2, primary_unit="pts",
+        comparison=SnapshotComparisonStyle(format=PercentFormat, dp=2, label="1D")
+    )]))(key="2026-09-27", by="spx",
+         values=(5287.76, 0.0063, 5287.76, "2026-09-27"))
+# <<<skill
+
+# >>>skill heatmaps/render_keyed_tiles_or_countries
+heatmap(category="Countries", heatmap_layout=Geographic, value_dp=1,
+        value_format=PercentFormat, color_min=-0.05, color_max=0.05,
+        key_field="country_code", value_field="return")(
+    key=("US", "GB"), values=(0.02, -0.01))
+# <<<skill
+
+# >>>skill reporters_shared/render_identity_labels
+bar(category="Countries", key_formats=[CountryFormat, TextFormat])(
+    key=[("US", "Technology")], values=(4.0,))
+# <<<skill
