@@ -7,9 +7,9 @@
   "issue": {
     "id": "ENG-3174",
     "url": "https://linear.app/epoch-inc/issue/ENG-3174/futureswarm-let-a-coordinating-parent-become-a-study-over-saved-child",
-    "state": "Backlog"
+    "state": "In Progress"
   },
-  "scheduling": "Future only. Excluded from current campaign and current fixing-agent implementation. No run until the feature is selected and qualified.",
+  "scheduling": "Selected for implementation by the owner's direct 24 November 2026 request. Keep excluded from the current frozen campaign until the matching AI/Portal feature target is integrated, ready and qualified. This scenario update starts no live work.",
   "mode": "natural_conversation_acceptance",
   "human_turns": [
     {
@@ -60,7 +60,7 @@
       "checks": [
         "U02"
       ],
-      "expected": "The parent Chat-to-Study transition and attached children are clear in existing Contextual Intelligence/navigation patterns."
+      "expected": "The same parent becomes a comparison Study while retaining its conversation and nested direct children. A compact card at the originating Chat turn opens the exact authored comparison dashboard in the main workspace. Separate response-table and JSON outputs remain at that Chat turn with their existing preview cards and dialogs; opening the dashboard does not relocate those response outputs."
     },
     {
       "agent_id": "ui-u08",
@@ -92,16 +92,16 @@
     }
   ],
   "prerequisites": [
-    "ENG-3174 selected for future work and shared ownership/type contract updated.",
+    "ENG-3174 selected for implementation; shared ownership/type contract implemented and integrated on the tested target.",
     "Reviewable UI/UX flow and canonical Product Pattern reconciliation before implementation.",
     "A qualified source target with supported saved-result composition and exact cross-child input retention.",
     "Readiness/account, fixture scope and budget frozen for a new campaign attempt."
   ],
   "non_goals": [
-    "No immediate implementation or test execution.",
+    "No live scenario execution before the matching target and bounded fixture are qualified.",
     "No generic mailbox, unqualified parent-child steering, grandchildren or silent reparenting.",
     "No automatic child reruns or live provider work.",
     "No mutation of the frozen 28-case catalogue or historical grades."
   ],
-  "authority_note": "Human explicitly requested a future issue and a scenario pending that issue on 23 November 2026."
+  "authority_note": "Human initially deferred the feature on 23 November 2026, then explicitly selected ENG-3174 for implementation on 24 November. Source implementation is now authorized; historical grades and frozen campaign definitions remain unchanged. Live acceptance still requires a matching ready target and a new bounded attempt."
 }

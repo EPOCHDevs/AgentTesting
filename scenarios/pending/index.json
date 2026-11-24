@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Deferred scenarios excluded from active campaigns.",
+  "scope": "Feature or qualification-gated scenarios excluded from frozen active campaigns.",
   "scenarios": [
     {
       "id": "SW05",
