@@ -60,7 +60,7 @@
       "checks": [
         "U02"
       ],
-      "expected": "The same parent becomes a comparison Study while retaining its conversation and nested direct children. A compact card at the originating Chat turn opens the exact comparison dashboard in the main workspace; raw report tables are not embedded in Chat."
+      "expected": "The same parent becomes a comparison Study while retaining its conversation and nested direct children. A compact card at the originating Chat turn opens the exact authored comparison dashboard in the main workspace. Separate response-table and JSON outputs remain at that Chat turn with their existing preview cards and dialogs; opening the dashboard does not relocate those response outputs."
     },
     {
       "agent_id": "ui-u08",
