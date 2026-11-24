@@ -77,9 +77,34 @@ def test_market_choice_requires_a_boolean(tmp_path, value):
         configure_market_pages(tmp_path / "server", value)
 
 
-def test_missing_native_plugin_is_explicit_and_does_not_edit_config(tmp_path):
+def test_retired_native_plugin_keeps_refresh_off_without_editing_config(tmp_path):
+    path = tmp_path / "config.json"
+    original = '{"plugins": [{"name": "retained", "config": {"keep": true}}]}'
+    path.write_text(original)
+    env = configure_market_pages(tmp_path / "server", False)
+    assert env["EPOCH_MI_PAGE_AUTO_REFRESH_ENABLED"] == "0"
+    assert env["EPOCH_MI_RATES_PAGE"] == "0"
+    assert path.read_text() == original
+
+
+def test_retired_native_plugin_cannot_enable_refresh(tmp_path):
     path = tmp_path / "config.json"
     original = '{"plugins": []}'
+    path.write_text(original)
+    catalog = tmp_path / "catalog"
+    (catalog / "current").mkdir(parents=True)
+    (catalog / "current/catalog_manifest.json").write_text("{}")
+    with pytest.raises(ValueError, match="no longer hosts Markets page refresh"):
+        configure_market_pages(tmp_path / "server", True, catalog_root=str(catalog))
+    assert path.read_text() == original
+
+
+def test_duplicate_native_plugins_are_rejected(tmp_path):
+    path = tmp_path / "config.json"
+    original = json.dumps({"plugins": [
+        {"name": "epoch_stratifyx::server::MiPageRuntimeService"},
+        {"name": "epoch_stratifyx::server::MiPageRuntimeService"},
+    ]})
     path.write_text(original)
     with pytest.raises(ValueError, match="exactly one"):
         configure_market_pages(tmp_path / "server", False)

@@ -1,0 +1,57 @@
+# Export end-to-end fixture: one native dashboard category per chart kind.
+# Source-free (literal rows only), research-only and without llm_call, so a run
+# reads no vendor data and makes no model call.
+
+pie(category="Pie", title="Allocation by asset class")(
+    key=("Equities", "Bonds", "Cash", "Gold"), values=(60.0, 25.0, 10.0, 5.0))
+
+gauge(category="Gauge", title="Composite score", min=0.0, max=100.0,
+      categories=["Low", "Neutral", "High"])(values=62.0)
+
+radar(category="Radar", title="Factor profile", axis_ids=["growth", "value", "momentum", "quality"],
+      axis_mins=[0, 0, 0, 0], axis_maxs=[100, 100, 100, 100],
+      series_ids=["Portfolio"])(
+    key=("growth", "value", "momentum", "quality"),
+    by=("Portfolio", "Portfolio", "Portfolio", "Portfolio"), values=(70, 35, 55, 80))
+
+nodes = sql_program(
+    queries={"rows": "SELECT * FROM (VALUES ('root', 'Portfolio', '', NULL::DOUBLE, NULL::DOUBLE, 1, 1), ('tech', 'Technology', 'root', 40.0, 0.05, 2, 2), ('health', 'Health care', 'root', 25.0, -0.02, 2, 3), ('energy', 'Energy', 'root', 15.0, 0.01, 2, 4), ('fin', 'Financials', 'root', 20.0, 0.03, 2, 5)) AS v(node_id, name, parent, size, color_value, level, position) ORDER BY position"},
+    outputs={"rows": relation_output(columns=[relation_field("node_id", Utf8), relation_field("name", Utf8), relation_field("parent", Utf8), relation_field("size", Float64), relation_field("color_value", Float64), relation_field("level", Int64), relation_field("position", Int64)], row_key=("node_id",), order_by=("position", "node_id"))},
+)()
+treemap(category="Treemap", title="Holdings by sector", color_value_format=PercentFormat)(
+    key=nodes.rows.node_id,
+    values=(nodes.rows.name, nodes.rows.parent, nodes.rows.size, nodes.rows.color_value, nodes.rows.level))
+
+heatmap(category="Heatmap tiles", title="Sector returns", heatmap_layout=Tiles, value_dp=1,
+        value_format=PercentFormat, color_min=-0.05, color_max=0.05,
+        key_field="sector", value_field="return")(
+    key=("Technology", "Health care", "Energy", "Financials", "Utilities", "Materials"),
+    values=(0.031, -0.012, 0.045, 0.008, -0.027, 0.0))
+
+heatmap(category="Heatmap world map", title="Country returns", heatmap_layout=Geographic, value_dp=1,
+        value_format=PercentFormat, color_min=-0.05, color_max=0.05,
+        key_field="country_code", value_field="return")(
+    key=("US", "GB", "DE", "JP", "BR", "IN", "AU", "ZA"),
+    values=(0.021, -0.008, 0.004, 0.017, -0.031, 0.026, 0.009, -0.015))
+
+cells = sql_program(
+    queries={"cells": "SELECT * FROM (VALUES ('SPY', 'SPY', 1.0), ('SPY', 'QQQ', 0.92), ('SPY', 'GLD', 0.05), ('QQQ', 'SPY', 0.92), ('QQQ', 'QQQ', 1.0), ('QQQ', 'GLD', -0.03), ('GLD', 'SPY', 0.05), ('GLD', 'QQQ', -0.03), ('GLD', 'GLD', 1.0)) AS v(row_label, column_label, correlation) ORDER BY row_label, column_label"},
+    outputs={"cells": relation_output(columns=[relation_field("row_label", Utf8), relation_field("column_label", Utf8), relation_field("correlation", Float64)], row_key=("row_label", "column_label"), order_by=("row_label", "column_label"))},
+)()
+heatmap(category="Heatmap matrix", title="Correlation matrix", value_format=DecimalFormat, value_dp=2)(
+    key=cells.cells.row_label, by=cells.cells.column_label, values=cells.cells.correlation)
+
+points = sql_program(
+    queries={"rows": "SELECT * FROM (VALUES (TIMESTAMPTZ '2025-01-02 21:00:00+00', 0.12, 0.08, 300.0), (TIMESTAMPTZ '2025-01-03 21:00:00+00', 0.18, 0.11, 120.0), (TIMESTAMPTZ '2025-01-06 21:00:00+00', 0.25, 0.09, 80.0), (TIMESTAMPTZ '2025-01-07 21:00:00+00', 0.09, 0.05, 450.0), (TIMESTAMPTZ '2025-01-08 21:00:00+00', 0.31, 0.14, 60.0)) AS v(timestamp, risk, reward, capitalisation) ORDER BY timestamp"},
+    outputs={"rows": relation_output(columns=[relation_field("timestamp", TimestampNsUtc), relation_field("risk", Float64), relation_field("reward", Float64), relation_field("capitalisation", Float64)], row_key=("timestamp",), order_by=("timestamp",))},
+)()
+scatter(category="Bubble", title="Risk, return and size", min_size=8, max_size=50, size_by=area)(
+    values=(points.rows.risk, points.rows.reward, points.rows.capitalisation))
+
+bars = sql_program(
+    queries={"rows": "SELECT * FROM (VALUES (TIMESTAMPTZ '2025-01-02 21:00:00+00', 100.0, 103.5, 99.2, 102.8, 1200.0), (TIMESTAMPTZ '2025-01-03 21:00:00+00', 102.8, 104.1, 101.0, 101.6, 900.0), (TIMESTAMPTZ '2025-01-06 21:00:00+00', 101.6, 102.2, 98.7, 99.3, 1500.0), (TIMESTAMPTZ '2025-01-07 21:00:00+00', 99.3, 101.9, 99.0, 101.4, 1100.0), (TIMESTAMPTZ '2025-01-08 21:00:00+00', 101.4, 105.0, 101.1, 104.6, 1700.0)) AS v(timestamp, open_price, high_price, low_price, close_price, volume) ORDER BY timestamp"},
+    outputs={"rows": relation_output(columns=[relation_field("timestamp", TimestampNsUtc), relation_field("open_price", Float64), relation_field("high_price", Float64), relation_field("low_price", Float64), relation_field("close_price", Float64), relation_field("volume", Float64)], row_key=("timestamp",), order_by=("timestamp",))},
+)()
+candlestick(title="Price history", category="Candlestick", price_unit="USD", price_dp=2, show_volume=True)(
+    key=bars.rows.timestamp,
+    values=(bars.rows.open_price, bars.rows.high_price, bars.rows.low_price, bars.rows.close_price, bars.rows.volume))

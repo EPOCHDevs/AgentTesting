@@ -66,8 +66,9 @@ The launcher uses the primary repositories beside AgentTesting:
 | Directory | Branch |
 |---|---|
 | `EpochBackend/` | `main` |
-| `EpochAI/` | `dev` |
-| `EpochClientPortal/` | `dev` |
+| `EpochAI/` | `main` |
+| `EpochClientPortal/` | `main` |
+| `EpochPlatform/` | `dev` |
 
 Before login or startup it checks those branches, rejects linked worktrees and
 uncommitted tracked changes, and compares each checkout with its current remote
@@ -77,18 +78,111 @@ commits and records both local and remote revisions. It never switches or pulls
 repositories automatically. Worktree/path overrides are not enabled.
 
 Use the primary Backend's existing `build/bin/epoch_stratifyx_server`, the
-primary EpochAI's `.venv`, and installed UI dependencies (Node 24+ with Corepack
-and the UI's pinned pnpm). Source freshness does not certify a native executable's
-build revision; rebuild it from that source through the normal Backend workflow.
+primary EpochAI's `.venv`, and installed UI and Platform dependencies (Node 24+
+with Corepack and the UI's pinned pnpm; `pnpm install` in EpochPlatform). Source
+freshness does not certify a native executable's build revision; rebuild it from
+that source through the normal Backend workflow. The launcher compiles Platform's
+TypeScript in place (`tsc -b`, incremental; Git ignores the output).
+
+Files and Space run on Epoch Platform, as in dev, QA and production. A front door
+on the profile's Backend port (9000) applies the deployed load balancer's path
+rules: `/api/v1/files*`, `/api/v1/space*`, the Files workers' `/internal/...`
+routes and `/api/v1/platform/*` go to Platform (port 9020); everything else goes
+to Backend (port 9010). The Portal, the agent and AgentTesting keep one API origin.
+Platform runs its general service in local mode (`EPOCH_FILES_LOCAL_ROOT`): no AWS
+account, with its objects and records in Backend's `personal_content` directory
+(`.artifacts/local-stack/backend/personal_content`), where the engine's local job
+store reads saved datasets, so a dataset saved locally is a local study input.
+Files uploaded through Backend's former local Files are not carried over. The
+agent's Files workers use the front door with the shared worker token, which goes
+to Platform, not Backend.
 
 ```bash
 .venv/bin/python -m tools.local_stack
 ```
 
+The agent server runs under `langgraph dev` on port 2024 by default (`local`
+profile). That server shares one Python process, so concurrent runs wait on each
+other. For parallel runs, start the licensed server instead:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up
+```
+
+This uses the `local-up` profile: the same Backend (9000) and Portal (3000) with
+the agent on **2124** under `langgraph up` (Postgres, Redis queue, background
+workers, custom auth). It needs Docker and a `LANGSMITH_API_KEY` with LangSmith
+Deployment access plus the matching `LANGSMITH_ENDPOINT`; no Enterprise licence
+key is used. The launcher builds `epoch-ai-up:<EpochAI commit>` from EpochAI's
+own `langgraph.json` once per commit (log: `.artifacts/local-stack/ai-build.log`),
+writes `langgraph-up.local.json`, `.env.up.local` (mode 600) and
+`docker-compose.up.local.yml` in EpochAI's directory, keeps them out of `git status`
+through `.git/info/exclude`, points the container at the host's Backend through
+`host.docker.internal`, and mounts host directories named by the agent env
+read-only at the same paths. Ctrl+C stops the services and runs
+`docker compose down`; Postgres data stays in its volume. Use
+`--env local-up` with `tools.agent_testing` for this stack.
+
 `local-stack.toml` is optional and may set `node_bin`; see
 `local-stack.example.toml`. Remove old worktree paths from an existing local
 configuration. A missing primary build/dependency is an explicit error, never a
 fallback to another checkout.
+
+For launchers started with the supervised Portal-refresh capability, a later
+qualified Portal code change can replace only the UI process:
+
+```bash
+.venv/bin/python -m tools.local_stack --refresh-ui \
+  --ui-commit <qualified-full-commit> --ui-configuration <current-configuration-sha256>
+```
+
+Read the current configuration hash and active bundle from
+`.artifacts/local-stack/ui-refresh-capability.json`. The primary Portal must be
+clean, on its expected branch, and at that exact qualified commit. The owner
+stages a separate immutable bundle and temporary loopback preview, checks the
+served index and module asset hashes, revalidates the clean exact source before
+publishing a build and immediately before stopping the old UI, then replaces
+only its UI child. A build-time source drift leaves an unpublished partial, so
+an explicit restored-source retry rebuilds it. A bind or
+readiness failure rolls back to the retained bundle; Backend, AI, Platform and
+the front door are not restarted. A failed acknowledgement write cannot repeat
+the swap. If a command times out, reconcile the saved request/result instead of
+submitting another.
+
+An older already-running launcher needs **one coordinated restart** to enable
+this capability; changing its Python files does not enable it in the existing
+process. This first slice preserves the current proxy/configuration and pinned
+preview dependency inputs. Changes to those inputs need a reviewed bootstrap.
+Building never prunes an active or rollback bundle. The command sends no model,
+provider, study or account operations and does not reload a person's browser.
+
+An explicitly reviewed rollback may select previously qualified artifacts while
+the primary checkouts remain at their current qualified revisions:
+
+```bash
+.venv/bin/python -m tools.local_stack --ai-runtime up --ui-runtime build \
+  --retained-cut /absolute/path/manifest.json \
+  --retained-cut-admission /absolute/path/review.json \
+  --retained-cut-admission-sha <review-file-sha256>
+```
+
+This is a separate operator-selected mode, never an automatic fallback. The
+normal clean, current integration-branch checks still run. The manifest pins
+workspace revisions separately from the runtime revisions, the existing AI
+image's full immutable ID, the original managed UI bundle and every file hash,
+configuration/dependency inputs, primary Native binaries/reference, stack
+identity and the original runtime qualification receipt. The independent
+passing review binds the exact manifest hash. The files contain hashes and
+paths, not environment credentials. Missing or changed artifacts/configuration
+fail before service preparation; this mode never builds, pulls, resets source
+or relabels an old artifact as new source. Readiness verifies the selected AI
+source/reference and the served UI hashes. Its health receipt explicitly records
+the retained runtime and current workspace separately.
+
+Portal refresh is disabled in retained mode, and UI failure retains the original
+all-service shutdown behavior. Leaving this mode requires a separately reviewed
+normal bootstrap. A failed startup preflight never runs Compose cleanup against
+an already-running stack; cleanup belongs only to a launcher that started AI.
 
 Local Markets pages (Equities, Rates, Calendar, FX, Commodities and Crypto) are
 **off by default**. The local stack uses the production vendor accounts, and
@@ -237,3 +331,69 @@ research acceptance is claimed; complete agent-trace validation needs an
 accessible thread in the selected environment.
 Keep credentials and raw session artifacts outside version control. Publish
 reviewed examples only.
+
+## Check study exports
+
+`tools.export_e2e` exports one study run per shape the Terminal can export and
+checks the result in headless Chrome. The fixtures are listed in
+[`campaigns/export-e2e/catalog.json`](campaigns/export-e2e/catalog.json).
+
+```bash
+.venv/bin/python -m tools.export_e2e --env dev run                      # every fixture
+.venv/bin/python -m tools.export_e2e --env dev run --only wide-table
+.venv/bin/python -m tools.export_e2e --env dev prepare                  # pin or create runs only
+.venv/bin/python -m tools.export_e2e --env dev inventory --refresh      # which runs fit which shape
+.venv/bin/python -m tools.export_e2e recheck ATTEMPT                    # re-judge saved evidence offline
+.venv/bin/python -m tools.export_e2e --env dev run --ui-url http://localhost:3002
+```
+
+`--ui-url` drives a Terminal on this machine, for example a Vite dev server of an
+unmerged branch built against the dev API, with dev's Backend, sign-in and
+fixtures. Only a loopback origin is accepted, because the browser is signed in
+there. The attempt is named after the override and records it, so its results
+aren't read as dev's.
+
+It uses the installed Google Chrome (`channel="chrome"`); it never downloads a
+browser. Sign in first with `tools.agent_testing --env dev login`. The browser
+gets the cached ID and access tokens in localStorage, under the keys Amplify
+reads, but never the refresh token.
+
+For each fixture the suite opens the study page's Export menu, then the print
+route, and waits for `data-export-ready`. It checks the rendered page against the
+export JSON the page embeds: sections and blocks, chart images, the cover, the
+file name, the 200-row limit, the usage-limit notice, and table cells at A4 and
+Letter widths. It then makes A4 and Letter PDFs. Each format is a check in
+`catalog.json`. A format is skipped while the Export menu doesn't offer it, and
+fails when the menu offers it but the suite has no check for it yet.
+
+It also asks Platform for each fixture's PDF made on the server
+(`POST /api/v1/platform/exports`, A4), as the signed-in owner, through the API.
+It reads the export every 2 s for up to 2 minutes, downloads a ready file
+without the bearer, and keeps it as `server-export-a4.pdf` (`pdf-server`). It
+then compares the file's section headings and table titles, in order, with the
+browser-print PDF (`pdf-server-text`). A run without a dashboard must be
+refused (422) or fail cleanly as `no_dashboard`. Once per attempt, on the first
+dashboard checked, it cancels a queued export (`pdf-server-cancel`) and clicks
+Export → PDF in the Terminal (`pdf-server-ui`). That check expects "Preparing
+your PDF…" and then a download, or the print layout in a new tab when the server
+refuses. A 404 (route not deployed), a 503 (unavailable) or the hourly limit
+(429) is a skip, not a failure. The suite has one identity, so another owner's
+read is skipped (`pdf-server-other-owner`). Signed download addresses are never
+recorded. Platform allows 20 exports an hour per owner, and a full run asks for
+about 15.
+
+The suite reuses the owner's existing runs where it can. A shape that no
+existing run has comes from a script in `campaigns/export-e2e/scripts`. Those
+scripts are research-only, source-free and without `llm_call`, so Backend makes
+no model call for them. The report text of backtests, Monte Carlo and tuning
+runs is charged to the owner's AI allowance. The suite never creates a backtest,
+and creates a Monte Carlo or tuning run only when the owner approves the cost:
+`prepare --allow-ai-cost monte-carlo` (or `tuning`) makes one, and reads the
+usage meters before the request and a minute after the run settles.
+Pinned and created run ids are kept per environment in the git-ignored
+`.artifacts/export-e2e/state-<env>.json`, so a rerun reuses them and never
+makes duplicates.
+
+Each attempt writes to `.artifacts/<attempt>/`: `report.md`, `summary.json`, and
+per fixture the PDFs, a picture of page 1, the export data without its images,
+and the raw observation. The command exits 1 when a check fails.

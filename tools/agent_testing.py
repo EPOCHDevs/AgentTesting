@@ -1,4 +1,4 @@
-"""Conversation driver for an explicitly selected local, dev, qa or prod stack.
+"""Conversation driver for an explicitly selected local, local-up, dev, qa or prod stack.
 
 Adapted from EpochAI's supervisor CLI: persistent threads, explicit interrupt
 replies and live capture. Product implementation imports and database access
@@ -34,7 +34,12 @@ from tools.evidence_redaction import redact_run
 from tools.traces import TraceWindow
 
 ROOT = Path(__file__).resolve().parents[1]
-Environment = Literal["local", "dev", "qa", "prod"]
+Environment = Literal["local", "local-up", "dev", "qa", "prod"]
+# Stacks on this machine: the launcher's agent under `langgraph dev` (local)
+# or the licensed server under `langgraph up` (local-up). Both share local sign-in.
+LOCAL_ENVIRONMENTS = ("local", "local-up")
+# The up agent runs in a container and reaches the host Backend through this name.
+CONTAINER_HOST = "host.docker.internal"
 
 
 class ServiceIdentity(TypedDict):
@@ -137,6 +142,10 @@ class Stack:
     # The LangSmith project this environment's agent traces to, when the
     # profile names one; otherwise trace collection uses LANGSMITH_PROJECT.
     langsmith_project: str | None = None
+    # The Portal's sign-in pool, for a Portal that publishes no runtime config
+    # (dev builds carry it in their bundle instead). Public values, not secrets.
+    user_pool_id: str | None = None
+    user_pool_client_id: str | None = None
 
     def identity(self) -> ServiceIdentity:
         # Preserve the established endpoint receipt shape. Profile selection is
@@ -152,14 +161,15 @@ class Stack:
     @classmethod
     def load(cls, path: Path, environment: Environment = "dev") -> Stack:
         if environment not in get_args(Environment):
-            raise ValueError("Choose local, dev, qa or prod.")
+            raise ValueError("Choose local, local-up, dev, qa or prod.")
         profiles = tomllib.loads(path.read_text())
         if environment not in profiles:
             raise ValueError(
                 f"No [{environment}] profile in {path}; no other profile will be substituted."
             )
         config = cls(**profiles[environment], environment=environment)
-        schemes = ("http", "https") if environment == "local" else ("https",)
+        local = environment in LOCAL_ENVIRONMENTS
+        schemes = ("http", "https") if local else ("https",)
         for url in (config.ai_url, config.backend_url, config.ui_url):
             parts = urlsplit(url)
             if (
@@ -171,20 +181,40 @@ class Stack:
                 or parts.fragment
             ):
                 raise ValueError(
-                    f"Configure explicit {'HTTP(S)' if environment == 'local' else 'HTTPS'} {environment} service URLs without credentials or query strings."
+                    f"Configure explicit {'HTTP(S)' if local else 'HTTPS'} {environment} service URLs without credentials or query strings."
                 )
         return config
 
+    @property
+    def is_local(self) -> bool:
+        return self.environment in LOCAL_ENVIRONMENTS
+
+    def agent_backend_url(self) -> str:
+        """The Backend URL as the agent itself addresses it."""
+        if self.environment != "local-up":
+            return self.backend_url
+        parts = urlsplit(self.backend_url)
+        return parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
+
     def login_path(self) -> Path:
         # Hosted logins are cached per Portal host, so one never reaches another stack.
-        if self.environment == "local":
+        if self.is_local:
             return local_auth.token_path()
         return local_auth.token_path(cast(str, urlsplit(self.ui_url).hostname))
 
     def user_pool(self) -> local_auth.UserPool:
-        """The sign-in pool the selected Portal publishes; local's is fixed."""
-        if self.environment == "local":
+        """The sign-in pool the selected Portal publishes; local's is fixed.
+
+        A Portal without published runtime config (a dev build) signs in with the
+        pool its profile names, if it names one.
+        """
+        if self.is_local:
             return local_auth.LOCAL
+        declared = (
+            local_auth.UserPool(self.user_pool_id, self.user_pool_client_id)
+            if self.user_pool_id and self.user_pool_client_id
+            else None
+        )
         try:
             response = httpx.get(
                 self.ui_url.rstrip("/") + "/epoch-runtime-config.json", timeout=15
@@ -194,9 +224,15 @@ class Stack:
             auth = published["amplifyOutputs"]["auth"]
             pool = local_auth.UserPool(auth["user_pool_id"], auth["user_pool_client_id"])
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            if declared:
+                return declared
             raise ValueError(
-                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; set {self.token_env}."
+                f"{self.ui_url} publishes no runtime config, so its sign-in pool is unknown; name it in the profile (user_pool_id, user_pool_client_id) or set {self.token_env}."
             ) from None
+        if declared and declared != pool:
+            raise ValueError(
+                f"The {self.environment} Portal publishes a different sign-in pool than environments.toml; update the profile before signing in."
+            )
         profile = {
             "backendUrl": self.backend_url,
             "agentUrl": self.ai_url,
@@ -219,7 +255,7 @@ class Stack:
     def bearer(self) -> str:
         value = os.environ.get(self.token_env)
         if not value and self.token_env == "EPOCH_TOKEN":
-            if self.environment == "local":
+            if self.is_local:
                 value = local_auth.cached_token()
             elif self.login_path().exists():
                 value = local_auth.cached_token(
@@ -284,7 +320,7 @@ async def check_stack(config: Stack, bearer: str) -> dict[str, object]:
         raise RuntimeError(
             f"{config.environment} AI is not ready; inspect its /health/custom response."
         )
-    if build.get("backend_url", "").rstrip("/") != config.backend_url.rstrip("/"):
+    if build.get("backend_url", "").rstrip("/") != config.agent_backend_url().rstrip("/"):
         raise RuntimeError(
             f"{config.environment} AI reports a different Backend from AgentTesting's configured Backend."
         )

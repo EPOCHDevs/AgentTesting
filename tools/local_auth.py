@@ -15,6 +15,9 @@ from pycognito import Cognito
 REGION = "us-west-1"
 POOL = "us-west-1_Fz1y1zKFq"
 CLIENT = "2m0ep0k9gksk00ml7qtkked0fk"
+# `epoch login`'s public PKCE client on the same pool (ENG-2510): managed login at
+# https://epoch-dev-signin.auth.us-west-1.amazoncognito.com, callbacks on localhost:53682-53684.
+CLI_CLIENT = "781nql1qfi7hhpmb42rha6pe4l"
 LOCAL_LOGIN = "python -m tools.local_stack --login"
 
 
@@ -83,6 +86,16 @@ def snapshot(user: Cognito, email: str, pool: UserPool = LOCAL) -> dict:
 def cached_token(
     path: Path | None = None, email: str | None = None, login_command: str = LOCAL_LOGIN
 ) -> str:
+    return cached_tokens(path, email, login_command)["id_token"]
+
+
+def cached_tokens(
+    path: Path | None = None,
+    email: str | None = None,
+    login_command: str = LOCAL_LOGIN,
+    min_validity: float = 120,
+) -> dict:
+    """The cached login's tokens, refreshed when fewer than `min_validity` seconds remain."""
     path = path or token_path()
     if not path.exists():
         raise ValueError(f"No test login. Run {login_command} first.")
@@ -94,7 +107,7 @@ def cached_token(
         expiry = jwt.decode(tokens["id_token"], options={"verify_signature": False})[
             "exp"
         ]
-        if expiry < time.time() + 120:
+        if expiry < time.time() + min_validity:
             pool = (
                 UserPool(tokens["user_pool_id"], tokens["client_id"])
                 if "user_pool_id" in tokens
@@ -110,7 +123,7 @@ def cached_token(
             user.renew_access_token()
             tokens = snapshot(user, tokens["email"], pool)
             save_tokens(tokens, path)
-        return tokens["id_token"]
+        return tokens
     except PermissionError:
         raise ValueError(
             f"The cached login belongs to another account; run {login_command} again."
