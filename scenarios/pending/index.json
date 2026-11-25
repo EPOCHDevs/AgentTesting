@@ -8,6 +8,13 @@
       "status": "pending_issue",
       "issue": "ENG-3174",
       "path": "parent-comparison-dashboard.json"
+    },
+    {
+      "id": "RE04L",
+      "agent_id": "journey-research",
+      "status": "pending_issue",
+      "issue": "ENG-3218",
+      "path": "model-lifecycle.json"
     }
   ]
 }

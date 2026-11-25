@@ -968,7 +968,21 @@
         "C02",
         "C03",
         "C06"
-      ]
+      ],
+      "pending_variants": {
+        "registry_id": "RE04L",
+        "path": "../pending/model-lifecycle.json",
+        "ids": [
+          "RE04-owned-lifecycle",
+          "RE04-save-recovery",
+          "RE04-space-fresh-chat",
+          "RE04-cloud-resource-independence",
+          "RE04-server-artifact-export",
+          "RE04-spy-pinned",
+          "RE04-family-matrix"
+        ],
+        "qualification": "Pending compatible implementation and a new qualified campaign; older RE04 results do not pass these variants."
+      }
     },
     {
       "id": "RE05",

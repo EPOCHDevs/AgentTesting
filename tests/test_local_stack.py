@@ -48,6 +48,33 @@ def test_platform_rejects_partial_identity_configuration(tmp_path, monkeypatch, 
                                      "p" * 40, tmp_path, tmp_path / "reference")
 
 
+@pytest.mark.parametrize("native_port", [9010, 19010])
+def test_platform_model_export_uses_the_allocated_local_native_origin(tmp_path, monkeypatch, native_port):
+    main = tmp_path / "apps/platform/dist/main.js"
+    main.parent.mkdir(parents=True)
+    main.touch()
+    (tmp_path / ".env.local").write_text(
+        "EPOCH_MODEL_EXPORT_SERVER_URL=https://hosted.example\n"
+        "EPOCH_RUN_STORE_BUCKET=must-not-inherit\n"
+        "EPOCH_RUN_STORE_INDEX_TABLE=must-not-inherit\n"
+    )
+    monkeypatch.setattr(local_stack, "BACKEND_PORT", native_port)
+    monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs:
+                        subprocess.CompletedProcess([], 0))
+    service = local_stack.prepare_platform(
+        tmp_path, "/bin/node", {"AWS_PROFILE": "must-not-inherit"}, {}, {},
+        tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference",
+    )
+    env = service[3]
+    assert env["EPOCH_MODEL_EXPORT_SERVER_URL"] == f"http://127.0.0.1:{native_port}"
+    assert env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    assert env["EPOCH_ENVIRONMENT"] == "local"
+    assert "EPOCH_RUN_STORE_BUCKET" not in env
+    assert "EPOCH_RUN_STORE_INDEX_TABLE" not in env
+    assert "AWS_PROFILE" not in env
+    assert env["AWS_CONFIG_FILE"] == env["AWS_SHARED_CREDENTIALS_FILE"] == "/dev/null"
+
+
 @pytest.mark.parametrize("operator_revision", [None, "", "  ", "operator-deployment-7"])
 @pytest.mark.parametrize("native_mi_plugin", [False, True])
 @pytest.mark.parametrize("identity_configured", [False, True])
