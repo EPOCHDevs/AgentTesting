@@ -318,3 +318,39 @@ same selected digest and cutoff, comparison of every scalar against the oracle,
 and retained zero-fit/effect evidence. Observed40-row `*_infer` replay cannot
 stand in for that gate. HMM remains separately qualified by its explicit causal
 versus retrospective operation; no HMM forecast oracle is supplied here.
+
+`family_consumers.py` wires the next actual cases, without producing, saving or
+cleaning up a fit. Each invocation is one explicit temporary, saved or
+post-cleanup stage. ARIMA/GARCH use empty-input checkpoint operations at1,2,5,21,
+retain four declared SQL/Arrow rows, check all scalar values against the oracle,
+and require zero-fit telemetry and the actual compiled checkpoint contracts.
+The checkpoint launch omits an application period. Existing observed drivers
+keep their previous explicit period. HMM instead runs two consumers of the same
+fit with the same first five observations and different suffixes, verifies the
+full probability rows and checks sealed direct/effective `ObservedCausal` mode.
+
+The driver is inactive without an actual root-issued case admission and explicit
+`--execute`. A case admission has kind
+`ROOT_ADMITTED_MODEL_LIFECYCLE_CONSUMER_V1`, `ready=true` and exact source/origin,
+storage-root, owner, producer/fit/digest/config/source/cutoff and selected saved
+pins. It references the actual descriptor and primary runtime packet by absolute
+path and SHA-256. The referenced runtime packet has kind
+`ROOT_ADMITTED_PRIMARY_MODEL_LIFECYCLE_RUNTIME_V1`, `ready=true`, and matching
+`native_url`, `platform_url`, `native_root`, `native_source`, `owner_user_id`.
+Root must derive these records from the actual started/served primary stack;
+source qualification or this schema description cannot act as readiness.
+
+The descriptor's actual storage location is preserved. Shared storage also needs
+an exact completed-generation witness; post-cleanup needs the actual root-admitted
+supported cleanup witness. The oracle artifact bytes must match the same digest
+and native manifest. The actual selected temporary or saved metadata is read
+before a consumer is launched. The driver retains every execution UUID before
+its write and does not resubmit unknown outcomes or an existing attempt.
+
+Credentials come only from the root-pinned maintained primary
+`EpochAI/tools/cognito_auth.py` `get_id_token()` callable. The driver keeps its
+opaque result in memory, inspects no JWT/profile/groups/cache, and stops if the
+provider returns None. Expected owner comes from the actual owned producer and
+artifact joins. There is no token-file, login, private identity or registry
+fallback. The local driver does not claim remote/deployed-IAM, natural AI,
+Portal, source-cleanup execution or campaign acceptance.

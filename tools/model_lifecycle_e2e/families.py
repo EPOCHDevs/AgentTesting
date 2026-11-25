@@ -20,7 +20,8 @@ def synthetic_value(index: int) -> float:
 
 
 def family_source(family: Family, *, model_ref: str, producer_execution: str | None = None,
-    manifest_sha256: str | None = None, fit: bool = False, save_as: str | None = None) -> str:
+    manifest_sha256: str | None = None, fit: bool = False, save_as: str | None = None,
+    changed_observed_suffix: bool = False) -> str:
     if family not in ('HMM', 'ARIMA', 'GARCH'):
         raise ValueError('Choose an actually implemented artifact family')
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,254}', model_ref):
@@ -31,11 +32,15 @@ def family_source(family: Family, *, model_ref: str, producer_execution: str | N
         raise ValueError('An exact saved manifest pin is required')
     if save_as is not None and (not fit or not save_as or len(save_as.encode()) > 255 or any(ord(c) < 32 for c in save_as)):
         raise ValueError('An authored Save name belongs only to a fit producer')
+    if changed_observed_suffix and (family != 'HMM' or fit):
+        raise ValueError('The causal suffix control consumes one existing HMM fit only')
     first = date(2022, 1, 1)
     rows = []
     for i in range(200):
         # A fixed owned regime/volatility signal, not sampled vendor data.
         value = synthetic_value(i)
+        if changed_observed_suffix and i >= 165:
+            value = -value
         rows.append(f"({i}, TIMESTAMPTZ '{first + timedelta(days=i)}T00:00:00Z', CAST('{value:.17g}' AS DOUBLE))")
     query = 'SELECT row_id, coordinate, value FROM (VALUES ' + ', '.join(rows) + ') AS owned(row_id,coordinate,value) ORDER BY coordinate,row_id'
     source = '''# Synthetic immutable-artifact family fixture; no provider observations.
