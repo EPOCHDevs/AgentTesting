@@ -1,6 +1,6 @@
 """Phased, provider-free API proof for Platform Save and exact native OLS reuse.
 
-Explicit private loopback services and synthetic fixture only. No campaign grade,
+Explicit private services through loopback origins and a synthetic fixture only. No campaign grade,
 AI/vendor call, shared stack refresh or unknown-outcome resubmission. Stop/restart
 the separately launched private services between produce/offline/consume phases.
 Retain every attempt directory, including failures.
@@ -98,11 +98,13 @@ def produce(args) -> None:
         assert original.read_bytes() == copied.read_bytes()
         write(args.evidence / 'saved-summary.json', saved.model_dump(mode='json'))
         write(args.evidence / 'saved-facts.json', facts.model_dump(mode='json'))
+        platform_launch = json.loads((args.native_root.parent / 'platform-export-launch.json').read_text())
+        assert platform_launch['port'] == urlsplit(platform_url).port
         write(args.evidence / 'receipt.json', {'status': 'saved', 'scope': 'provider-free private server transfer; no AI/Portal/S3 acceptance',
             'owner': owner, 'dispatch': args.dispatch, 'definition_id': definition,
             'producer_execution': producer, 'continuation_execution': continuation,
             'model_ref': saved.model_ref, 'digest': digest, 'manifest_sha256': saved.manifest_sha256,
-            'native_url': native_url, 'platform_url': platform_url, 'fit_count': 1, 'continuation_fit_count': 0,
+            'native_url': native_url, 'platform_url': platform_url, 'platform_pid_before_restart': platform_launch['pid'], 'fit_count': 1, 'continuation_fit_count': 0,
             'concurrent_equal_saves': len(repeats), 'save_numerical_executions': 0})
 
 
@@ -144,6 +146,8 @@ def offline(args) -> None:
     parsed = urlsplit(loopback(args.native_url))
     with socket.socket() as probe:
         assert probe.connect_ex((parsed.hostname, parsed.port)) != 0, 'Stop only the explicitly owned private Backend before this phase'
+    platform_launch = json.loads((args.native_root.parent / 'platform-export-launch.json').read_text())
+    assert platform_launch['pid'] != receipt['platform_pid_before_restart'], 'Restart the owned private Platform and retain the actual changed launch PID'
     token, owner = caller(args.token_file)
     assert owner == receipt['owner']
     request = json.loads((args.evidence / 'save-intent.json').read_text())
@@ -156,7 +160,8 @@ def offline(args) -> None:
     destination = args.evidence / 'offline-restart.json'
     if destination.exists(): raise ValueError('Retain prior evidence; choose a new attempt instead of overwriting')
     write(destination, {'status': 'passed', 'native_port_closed': True, 'reads_and_equal_retry_without_backend': True,
-        'model_ref': receipt['model_ref'], 'digest': receipt['digest'], 'manifest_sha256': receipt['manifest_sha256']})
+        'model_ref': receipt['model_ref'], 'digest': receipt['digest'], 'manifest_sha256': receipt['manifest_sha256'],
+        'platform_pid_before': receipt['platform_pid_before_restart'], 'platform_pid_after': platform_launch['pid']})
 
 
 def detach(args) -> None:
@@ -191,6 +196,10 @@ def consume(args) -> None:
     detached = args.evidence / 'source-detach.json'
     if args.remove_native_sources:
         assert detached.is_file(), 'Run detach while the owned Native server is stopped, then restart before consumption'
+        moved = json.loads(detached.read_text())
+        launch = json.loads((args.native_root.parent / 'native-export-launch.json').read_text())
+        assert launch['pid'] != moved['native_pid_before_restart'], 'Restart the private Native after source detachment'
+        assert Path(launch['storage_root']).resolve() == args.native_root.resolve()
     with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(timeout=30, trust_env=False) as model_http:
         models = EpochModels(base_url=loopback(args.platform_url), token=token, httpx_client=model_http, follow_redirects=False)
         facts = models.read_model(receipt['model_ref'])
