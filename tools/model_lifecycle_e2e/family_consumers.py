@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
 import json
@@ -219,6 +220,12 @@ def compare_hmm_prefix(base: dict, changed: dict) -> None:
         raise AssertionError('HMM causal control changed its declared columns')
     if len(base['rows']) != 40 or len(changed['rows']) != 40:
         raise AssertionError('HMM causal control omitted observed rows')
+    for table in (base, changed):
+        for index, row in enumerate(table['rows']):
+            expected_coordinate = int((datetime(2022, 1, 1, tzinfo=timezone.utc)
+                + timedelta(days=160 + index)).timestamp()) * 1_000_000_000
+            if type(row[0]) is not int or row[0] != expected_coordinate:
+                raise AssertionError('HMM observed coordinate differs from the exact UTC-ns fixture grid')
     if base['rows'][:5] != changed['rows'][:5]:
         raise AssertionError('Changed suffix revised an earlier filtered probability')
     if [x[1] for x in base['rows'][5:]] == [x[1] for x in changed['rows'][5:]]:
@@ -229,7 +236,7 @@ def compare_hmm_prefix(base: dict, changed: dict) -> None:
             if (not all(math.isfinite(x) for x in (observed, p0, p1))
                     or not math.isclose(observed, expected, abs_tol=1e-14)
                     or not 0 <= p0 <= 1 or not 0 <= p1 <= 1
-                    or not math.isclose(p0 + p1, 1, abs_tol=1e-12)):
+                    or not math.isclose(p0 + p1, 1, rel_tol=0, abs_tol=1e-12)):
                 raise AssertionError('Invalid HMM filtered probability output')
 
 

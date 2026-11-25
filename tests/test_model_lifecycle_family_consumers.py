@@ -13,6 +13,14 @@ from tests.test_model_lifecycle_forecast_oracle import garch
 
 
 class FamilyConsumerSourceTest(unittest.TestCase):
+    def hmm_answers(self):
+        # Independent literal epoch for2022-06-10T00:00:00Z plus whole UTC days.
+        first=1_654_819_200_000_000_000
+        columns=['coordinate','observed','p0','p1']
+        base={'columns':columns,'rows':[[first+i*86_400_000_000_000,synthetic_value(160+i),.2,.8] for i in range(40)]}
+        changed={'columns':columns,'rows':[[first+i*86_400_000_000_000,synthetic_value(160+i)*(-1 if i>=5 else 1),.3 if i>=5 else .2,.7 if i>=5 else .8] for i in range(40)]}
+        return base,changed
+
     def test_forecasts_have_four_exact_empty_input_calls_and_one_origin(self):
         for family in ('ARIMA', 'GARCH'):
             source = forecast_source(family, model_ref='owned', producer_execution='producer')
@@ -38,15 +46,30 @@ class FamilyConsumerSourceTest(unittest.TestCase):
             family_source('HMM', model_ref='owned', fit=True, changed_observed_suffix=True)
 
     def test_prefix_assertion_rejects_suffix_leak_and_false_intervention(self):
-        columns = ['coordinate', 'observed', 'p0', 'p1']
-        base = {'columns': columns, 'rows': [[i, synthetic_value(160+i), .2, .8] for i in range(40)]}
-        changed = {'columns': columns, 'rows': [[i, synthetic_value(160+i)*(-1 if i>=5 else 1), .3 if i>=5 else .2, .7 if i>=5 else .8] for i in range(40)]}
+        base,changed=self.hmm_answers()
         driver.compare_hmm_prefix(base, changed)
         changed['rows'][0][2:4] = [.4, .6]
         with self.assertRaisesRegex(AssertionError, 'revised an earlier'):
             driver.compare_hmm_prefix(base, changed)
         with self.assertRaisesRegex(AssertionError, 'did not actually change'):
             driver.compare_hmm_prefix(base, base)
+
+    def test_equally_shifted_duplicate_or_reordered_coordinates_are_refused(self):
+        for mode in ('shift','duplicate','reorder'):
+            base,changed=self.hmm_answers()
+            for table in (base,changed):
+                if mode=='shift':
+                    for row in table['rows']:row[0]+=1
+                elif mode=='duplicate':table['rows'][1][0]=table['rows'][0][0]
+                else:table['rows'].reverse()
+            with self.subTest(mode=mode),self.assertRaisesRegex(AssertionError,'coordinate'):
+                driver.compare_hmm_prefix(base,changed)
+
+    def test_probability_sum_just_outside_absolute_tolerance_is_refused(self):
+        base,changed=self.hmm_answers()
+        base['rows'][10][3]=.800000000002
+        with self.assertRaisesRegex(AssertionError,'Invalid HMM filtered probability'):
+            driver.compare_hmm_prefix(base,changed)
 
 
 class ConsumerAdmissionTest(unittest.TestCase):
