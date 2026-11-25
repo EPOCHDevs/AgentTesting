@@ -295,3 +295,26 @@ checks every owned prediction/baseline/score, and requires retained zero-fit
 telemetry. It stops if its evidence directory already exists, preserving unknown
 outcomes rather than resubmitting. The executed notebook and its receipt are a
 separate channel verdict, not an AI/Portal/cloud acceptance claim.
+
+`forecast_oracle.py` is a read-only engineering oracle for the next checkpoint
+forecast cases. It requires an exact owned artifact digest, owner and original
+producer before reading the versioned Native ARIMA/GARCH payload. It retains
+full-precision fitted parameters, terminal histories, checkpoint matrices and
+optimizer restart evidence. It does not estimate a model, reconstruct missing
+state, call a service or add a public parameter-table interface.
+
+The ARIMA oracle independently propagates the retained linear state and
+covariance and computes normal prediction intervals. It currently accepts the
+integrated state-space path; the scheduled fixture is ARIMA(0,1,0) with drift.
+The GARCH oracle uses the normal GARCH(1,1) terminal squared residual and variance
+and checks the conditional variance recurrence and its square-root volatility.
+Both helpers bound horizons to128 for this qualification harness; that bound is
+not the public operation's maximum. The frozen scenario uses1,2,5,21.
+
+Synthetic byte/math controls and successful parsing of an authentic retained
+checkpoint establish decoder compatibility only. A future-forecast verdict still
+requires actual `arima_forecast_from_fit`/`garch_forecast_from_fit` outputs from the
+same selected digest and cutoff, comparison of every scalar against the oracle,
+and retained zero-fit/effect evidence. Observed40-row `*_infer` replay cannot
+stand in for that gate. HMM remains separately qualified by its explicit causal
+versus retrospective operation; no HMM forecast oracle is supplied here.
