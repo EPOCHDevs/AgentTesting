@@ -134,6 +134,15 @@ saved. These drivers are prepared; a generated script is not a passing live run.
 The intermediate Backend-owned `http_owned` Save entry point is retired; its
 execution and Arrow helpers remain shared.
 
+For the owned `produce` journey, `--drop-first-save-response` uses a real HTTP
+transport, lets the actual Platform request finish successfully, then drops its
+reply before the generated client receives a result. The next request reconciles
+the same retained Save identity. This is explicit client-side fault injection,
+not proof of interruption inside publication or cloud worker recovery. The copied
+OLS artifact is also decoded read-only and its full-precision coefficients,
+training count and baseline are checked against the independent fixture oracle;
+this does not add a public fitted-parameter API.
+
 `family_http.py` separately prepares HMM, ARIMA and GARCH replay/Save consumption
 checks. Each family needs its own actual evidence. They do not establish missing
 PCA, scaler, clustering or fitted-parameter output capabilities.

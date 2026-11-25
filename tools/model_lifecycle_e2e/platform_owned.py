@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ from stratifyx import StratifyX
 
 from .http_effects import fit_count, stable_lines
 from .http_owned import execute, table_answers, write
+from .native_artifact import assert_fixture_state, read_owned_ols
 from .oracle import expected
 from .source import fixture_source
 
@@ -47,6 +49,39 @@ def effects(root: Path, owner: str, execution: str, count: int, destination: Pat
     logs, log_sha = stable_lines(job / 'logs.jsonl')
     events, event_sha = stable_lines(job / 'events.jsonl')
     write(destination, fit_count(logs, events, execution, count) | {'logs_sha256': log_sha, 'events_sha256': event_sha})
+
+
+class LostSaveResponse(httpx.BaseTransport):
+    """Drop one actual successful HTTP reply before the generated SDK sees it."""
+    def __init__(self, evidence: Path):
+        self.inner = httpx.HTTPTransport(trust_env=False)
+        self.evidence = evidence
+        self.calls = 0
+        self.dropped = False
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        assert self.calls == 1 and request.method == 'POST' and request.url.path == '/api/v1/models'
+        response = self.inner.handle_request(request)
+        body = bytearray()
+        try:
+            for part in response.iter_raw():
+                body.extend(part)
+                if len(body) > 64 * 1024:
+                    raise ValueError('The owned Save reply exceeds the response-loss fixture bound')
+        finally:
+            response.close()
+        if response.status_code not in (200, 201):
+            return httpx.Response(response.status_code, headers=response.headers, content=bytes(body), request=request)
+        self.dropped = True
+        write(self.evidence, {'fault': 'client transport drops actual successful HTTP response',
+            'http_status': response.status_code, 'body_sha256': hashlib.sha256(body).hexdigest(),
+            'body_bytes': len(body), 'calls': self.calls,
+            'scope': 'actual service request succeeded; generated client receives no result; not mid-publication worker recovery'})
+        raise httpx.RemoteProtocolError('Owned fixture dropped the accepted Save response', request=request)
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 def produce(args) -> None:
@@ -84,6 +119,17 @@ def produce(args) -> None:
             'fit_name': fit['fit_name'], 'expected_digest': digest, 'source_location': 'server'}
         write(args.evidence / 'save-intent.json', request)
         before = sorted(path.name for path in (args.native_root / 'research_studies' / owner).iterdir())
+        if args.drop_first_save_response:
+            loss = LostSaveResponse(args.evidence / 'lost-save-response.json')
+            with httpx.Client(timeout=90, trust_env=False, transport=loss) as lost_http:
+                lost_client = EpochModels(base_url=platform_url, token=token, httpx_client=lost_http, follow_redirects=False)
+                try:
+                    lost_client.save_model(**request, request_options={'max_retries': 0})
+                except Exception:
+                    if not loss.dropped or loss.calls != 1:
+                        raise
+                else:
+                    raise AssertionError('The generated client unexpectedly received the dropped Save response')
         saved = models.save_model(**request, request_options={'max_retries': 0})
         with ThreadPoolExecutor(max_workers=4) as pool:
             repeats = list(pool.map(lambda _: models.save_model(**request, request_options={'max_retries': 0}), range(8)))
@@ -96,6 +142,9 @@ def produce(args) -> None:
         original = personal / 'models/v1/artifacts' / digest[7:]
         copied = personal / 'saved-models/v1/artifacts' / digest[7:]
         assert original.read_bytes() == copied.read_bytes()
+        state = read_owned_ols(copied, digest=digest, owner=owner, execution=producer)
+        assert_fixture_state(state, args.fixture)
+        write(args.evidence / 'retained-ols-state.json', asdict(state))
         write(args.evidence / 'saved-summary.json', saved.model_dump(mode='json'))
         write(args.evidence / 'saved-facts.json', facts.model_dump(mode='json'))
         platform_launch = json.loads((args.native_root.parent / 'platform-export-launch.json').read_text())
@@ -107,6 +156,7 @@ def produce(args) -> None:
             'native_url': native_url, 'native_root': str(args.native_root), 'platform_url': platform_url,
             'fixture_sha256': hashlib.sha256(args.fixture.read_bytes()).hexdigest(),
             'platform_pid_before_restart': platform_launch['pid'], 'fit_count': 1, 'continuation_fit_count': 0,
+            'lost_accepted_save_response': bool(args.drop_first_save_response),
             'concurrent_equal_saves': len(repeats), 'save_numerical_executions': 0})
 
 
@@ -228,6 +278,8 @@ def main() -> None:
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--dispatch', choices=['inprocess', 'subprocess'], default='inprocess')
     parser.add_argument('--remove-native-sources', action='store_true')
+    parser.add_argument('--drop-first-save-response', action='store_true',
+        help='Inject a client transport failure after an actual successful Save response, then reconcile the same intent')
     args = parser.parse_args()
     if not all(path.is_absolute() for path in (args.native_root, args.fixture, args.evidence, args.token_file)):
         raise ValueError('Use exact absolute private fixture/evidence paths')
