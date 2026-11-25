@@ -976,6 +976,8 @@
           "RE04-owned-lifecycle",
           "RE04-save-recovery",
           "RE04-space-fresh-chat",
+          "RE04-cloud-resource-independence",
+          "RE04-server-artifact-export",
           "RE04-spy-pinned",
           "RE04-family-matrix"
         ],

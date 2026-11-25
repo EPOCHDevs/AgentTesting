@@ -158,3 +158,48 @@ This qualifies only the owned native graph/file-store/event boundary. The
 post-completion HTTP Save receipt/provenance, generated clients, Platform/Space,
 conversation and Portal still require separate actual integration evidence.
 No campaign grade, remote deployment or SPY-market acceptance follows from it.
+
+## Controlling service ownership and required isolation evidence
+
+The owner corrected the unmerged application boundary on 24 November: Platform
+owns saved resources and accesses their S3 objects directly. Saved-model Save,
+catalogue, metadata, search and script reads must not depend on Backend HTTP.
+Backend owns native computation and artifacts still held by a server. A narrow
+server-held export is distinct from ordinary cloud-backed reads.
+
+Qualify the pending `RE04-cloud-resource-independence` variant with Backend HTTP
+unavailable to Platform and measured outbound calls, not only a transport double.
+Native execution must publish a versioned fit/producer descriptor with the exact
+sealed-config digest, public producer snapshot and verified fit roster as part of
+the completed generation. Platform reads those immutable resources, pins/copies
+the chosen artifact and provenance, and owns intent/ready/catalogue state.
+
+The separate `RE04-server-artifact-export` variant qualifies the exceptional
+server-held transfer, unknown-response retry and subsequent server shutdown.
+Neither case is passing merely because it is registered here. Source removal
+is restricted to fixture-owned material and happens only after evidence/pins are
+retained. Missing historical descriptors stay explicit.
+
+The earlier `http_owned.py` receipts qualify an intermediate Backend-hosted
+application implementation that has been withdrawn. Preserve their numerical,
+identity and telemetry evidence; do not present them as final Platform ownership
+acceptance. Update the transport adapter against the compatible Platform contract
+before using this driver for final lifecycle qualification.
+
+## Native provenance output through the actual API
+
+`native_provenance.py` qualifies only the native output slice. Run it against an
+explicit private task server/store, using a new evidence directory and the normal
+signed test login. Choose `--dispatch inprocess` and `--dispatch subprocess` in
+separate runs. It creates synthetic owned producer/continuation definitions,
+checks every declared prediction/baseline/score, and verifies raw `model_fits.json`
+bytes against the completion manifest, exact config, pinned script and native
+artifact digest. Retained complete log streams must show one producer fit and
+zero continuation fits; fitting must leave the native saved-name catalogue empty.
+
+The 25 November private task receipts pass in both modes under
+`.artifacts/model-lifecycle-native-20261125/owned-provenance-{inprocess,subprocess}-1/`.
+The native source checkpoint is Backend `be5467e01b`. This is an engineering
+qualification helper, not a campaign grade or Platform Save/AI/Portal acceptance.
+Refer to the tracker and native validation receipt for the precise binary scope;
+a later schema-3 compatibility guard received its own focused regression gates.

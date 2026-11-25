@@ -40,6 +40,27 @@
       "acceptance": "Find the chosen identity in All/Models and a folder, including beyond the first page and ambiguous names. Read approved facts and exact pinned producer script; reload and fresh-chat shared search/read retain the digest. Search/open/select trigger zero proactive AI, fits or executions. An explicit supported reuse request creates only the declared scoring work."
     },
     {
+      "id": "RE04-cloud-resource-independence",
+      "title": "Cloud Save and Space reads with Backend HTTP unavailable",
+      "requires": [
+        "ENG-2755",
+        "ENG-2758",
+        "ENG-1532",
+        "ENG-3218"
+      ],
+      "acceptance": "After an owned completed generation and its native fit/provenance descriptors are in shared storage, make Backend HTTP unavailable to Platform. Save the exact selected fit directly from those resources; repeat/concurrently retry Save, browse All/Models/folders, search, read metadata and pinned script with zero Backend HTTP requests, zero fits and zero numerical executions. Restart Platform and remove only fixture-owned source material after independent pinning; identity/digest/provenance remain exact. Native reuse later loads the Platform-owned saved artifact and produces only declared scoring work. A missing historical producer descriptor is an explicit limitation, never a hidden native lookup or refit."
+    },
+    {
+      "id": "RE04-server-artifact-export",
+      "title": "Server-held artifact export followed by server shutdown",
+      "requires": [
+        "ENG-2755",
+        "ENG-2758",
+        "ENG-3218"
+      ],
+      "acceptance": "Use a trusted storage-location descriptor to select the bridge only while an owned fit remains server-held. Transfer exact artifact bytes and pinned native producer facts into Platform-owned storage without resealing/refitting. Exercise a lost transfer response and equal retry. Then shut down the fixture server; Platform Save completion/read/reload must use the transferred resource without another server request. Cloud-backed sources must never take this bridge. Record transfer and publication effects independently."
+    },
+    {
       "id": "RE04-spy-pinned",
       "title": "New pinned-data SPY fit and exact January continuation",
       "requires": [
