@@ -123,10 +123,31 @@ must resolve to that build's matching package/compiler/DataSDK bundle. The
 service, save a model or pass a numerical/API/SDK/UI acceptance gate. It is not a
 new product CLI or a replacement for Backend's managed build tools.
 
-Public SDK submissions remain to be implemented/qualified against the completed
-service cut. Do not infer a public service pass from generated scripts or use
-placeholder producer IDs as actual public model references. The owned native
-runtime boundary is qualified separately below.
+`platform_owned.py` now prepares phased real API/SDK submissions against explicit
+qualified private Native and Platform origins. `produce` checks the owned OLS
+oracle, exact continuation, explicit Save and concurrent equal retries. Then stop
+Native and restart Platform for `offline`; detach only the owned fixture's source
+resources with retained backups while Native is stopped; restart Native before
+`consume --remove-native-sources`. The launch receipts must prove changed service
+PIDs. `authored` separately checks that only the fit with explicit `save_as` is
+saved. These drivers are prepared; a generated script is not a passing live run.
+The intermediate Backend-owned `http_owned` Save entry point is retired; its
+execution and Arrow helpers remain shared.
+
+`family_http.py` separately prepares HMM, ARIMA and GARCH replay/Save consumption
+checks. Each family needs its own actual evidence. They do not establish missing
+PCA, scaler, clustering or fitted-parameter output capabilities.
+
+After a passed API `final-receipt.json`, `notebook.py` generates an explicit
+scoring-only notebook. Use `--kernel-name` for a private kernel backed by the exact
+qualified installed SDK environment. Running it admits one new scoring execution,
+checks all rows and zero fit effects, and retains Python executable, SDK versions
+and module paths. It never trains, saves or reconstructs a model. Do not overwrite
+an existing notebook or attempt directory after an uncertain outcome.
+
+None of these engineering drivers establish a campaign verdict, complete browser
+journey, agent-mediated reuse or direct-S3 independence by themselves. The owned
+native runtime boundary is qualified separately below.
 
 ## Owned native graph execution
 
