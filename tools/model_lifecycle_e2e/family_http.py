@@ -85,7 +85,7 @@ def invariants(family: str, answer: dict) -> None:
 
 def journey(args) -> None:
     args.evidence.mkdir(mode=0o700)
-    token, owner = caller(args.token_file)
+    token, owner = caller(args.expected_owner)
     native_url, platform_url = loopback(args.native_url), loopback(args.platform_url)
     with httpx.Client(timeout=150, trust_env=False) as native_http, httpx.Client(timeout=90, trust_env=False) as platform_http:
         native = StratifyX(base_url=native_url, token=token, httpx_client=native_http, follow_redirects=False)
@@ -142,12 +142,17 @@ def main() -> None:
     parser.add_argument('--native-url', required=True)
     parser.add_argument('--platform-url', required=True)
     parser.add_argument('--native-root', type=Path, required=True)
-    parser.add_argument('--token-file', type=Path, required=True)
+    parser.add_argument('--expected-owner', required=True)
+    parser.add_argument('--root-readiness', type=Path, required=True)
+    parser.add_argument('--root-readiness-sha256', required=True)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--dispatch', choices=['inprocess', 'subprocess'], default='inprocess')
     args = parser.parse_args()
-    if not all(path.is_absolute() for path in [args.native_root, args.token_file, args.evidence]):
+    if not all(path.is_absolute() for path in [args.native_root, args.evidence]):
         raise ValueError('Use explicit absolute owned fixture paths')
+    from .opaque_auth import admit_primary
+    admit_primary(args.root_readiness,args.root_readiness_sha256,native_url=args.native_url,
+        platform_url=args.platform_url,native_root=args.native_root,expected_owner=args.expected_owner)
     journey(args)
 
 

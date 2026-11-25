@@ -354,3 +354,27 @@ provider returns None. Expected owner comes from the actual owned producer and
 artifact joins. There is no token-file, login, private identity or registry
 fallback. The local driver does not claim remote/deployed-IAM, natural AI,
 Portal, source-cleanup execution or campaign acceptance.
+
+`owned_primary.py` is the actual primary OLS producer/continuation/explicit
+Save/saved-consumer entry point. It requires the same actual root readiness
+packet, an explicit expected owner and `--execute`. It uses only the pinned
+opaque provider, joins that expected owner to the actual new producer/artifact
+and saved facts, and checks full owned numerical rows and retained1/0/0 fits.
+It snapshots the existing bounded saved catalogue instead of requiring it to
+be empty. It does not use private launch-PID files, stop/restart shared services,
+detach source directories or claim source-cleanup/S3 independence. Those require
+their separately admitted stages and witnesses.
+
+The original private `platform_owned` and `family_http` entry points now also
+require explicit expected-owner/root-readiness inputs and use that opaque
+credential boundary. Their older private restart/detach assumptions remain
+restricted; historical receipt paths are not permission to apply them to the
+primary stack. Generated notebooks consume a newly passed admitted-primary API
+receipt, recheck its fixture/resource pins and use the same opaque provider.
+Existing executed notebooks and all older receipts remain unchanged.
+
+The optional lost-response fixture deliberately observes one real successful
+Save response and withholds it only from its fixture client. It first reconciles
+that observed identity with an ordinary read before any known equal retry.
+Genuinely unknown real outcomes stop all writes. This is not a shared proxy,
+host failure injection, worker-recovery test or automatic request retry loop.
