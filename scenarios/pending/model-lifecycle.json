@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "id": "RE04L",
+  "base_case": "RE04",
+  "agent_id": "journey-research",
+  "title": "Exact model lifecycle from fit through Space and fresh-chat reuse",
+  "status": "pending_issue",
+  "issue": {
+    "id": "ENG-3218",
+    "url": "https://linear.app/epoch-inc/issue/ENG-3218",
+    "state": "In Progress"
+  },
+  "scheduling": "Implementation authorized by the owner. These named variants remain outside active/frozen campaigns until the matching local service cut, fixture/account, budgets and evidence scope are ready. This registration starts no service, model or paid work.",
+  "variants": [
+    {
+      "id": "RE04-owned-lifecycle",
+      "title": "Owned deterministic fit, holdout, continuation and explicit Save",
+      "requires": [
+        "ENG-2755",
+        "ENG-3217"
+      ],
+      "acceptance": "One native OLS fit; compare full coefficients, joint-sample training mean, every holdout and continuation row and both MSEs with the independent rational oracle. Continuation and explicit Save consume the original digest and baseline with zero refits. Fitting alone leaves the saved catalogue unchanged. Equal/concurrent Save returns one exact saved identity."
+    },
+    {
+      "id": "RE04-save-recovery",
+      "title": "Exact selection, ownership and interrupted Save recovery",
+      "requires": [
+        "ENG-2755"
+      ],
+      "acceptance": "Multiple fits require selection. Stale expected digests conflict; wrong-owner, missing/corrupt state, feature/options and producer-provenance mismatches fail without replacement work. Pause fixture-owned publication boundaries, retry the same intent after source loss and prove the exact accepted digest and pinned source survive. A lost private payload cannot fall back to a different published model."
+    },
+    {
+      "id": "RE04-space-fresh-chat",
+      "title": "Find, open and reuse the exact saved model from Space",
+      "requires": [
+        "ENG-2758",
+        "ENG-1532",
+        "ENG-3118"
+      ],
+      "acceptance": "Find the chosen identity in All/Models and a folder, including beyond the first page and ambiguous names. Read approved facts and exact pinned producer script; reload and fresh-chat shared search/read retain the digest. Search/open/select trigger zero proactive AI, fits or executions. An explicit supported reuse request creates only the declared scoring work."
+    },
+    {
+      "id": "RE04-spy-pinned",
+      "title": "New pinned-data SPY fit and exact January continuation",
+      "requires": [
+        "ENG-3217",
+        "ENG-3218"
+      ],
+      "acceptance": "Use a newly authored supported one-lag OLS recipe and pinned vendor observations; freeze feature timing, train/holdout split, finite sample, units and forecast semantics. Independently reproduce coefficients, baseline and all January predictions. Preserve the original SQL-only failed attempt; do not reconstruct its missing coefficients from text or silently refit it."
+    },
+    {
+      "id": "RE04-family-matrix",
+      "title": "Supported native families and fitted parameter outputs",
+      "requires": [
+        "ENG-2754",
+        "ENG-2756",
+        "ENG-2757",
+        "ENG-3218"
+      ],
+      "acceptance": "Qualify HMM, ARIMA/GARCH and each actually implemented clustering/PCA/scaler fit/consume path separately with family-specific oracles, exact identity and fit/execution effects. Fitted parameter tables need numerical/shape checks. An OLS or one-family pass cannot certify another family; unsupported DBSCAN consume behavior remains explicit."
+    }
+  ],
+  "human_turns": [
+    {
+      "stage": "continue",
+      "message": "Use the same fitted model for January, without refitting, and compare it with the same baseline."
+    },
+    {
+      "stage": "save",
+      "message": "Save this fitted model so I can use it again."
+    },
+    {
+      "stage": "fresh_chat",
+      "message": "Find the model I saved and use it for this prediction."
+    }
+  ],
+  "reply_protocol": "Use short natural turns; let actual questions drive human replies. Keep technical IDs, tool sequences and numerical oracles in private fixture evidence, never in simulated human instructions.",
+  "private_fixture": {
+    "first_slice": "tools/model_lifecycle_e2e/fixtures/owned-observed-predictor.csv",
+    "oracle": "tools/model_lifecycle_e2e/oracle.py",
+    "qualification": "The owned relation has supplied observed predictors; it does not construct a lag, claim real SPY prices or represent an exchange calendar. The separate SPY variant must establish its own real one-lag timing.",
+    "mutation_scope": "Only disposable fixture-owned data. Preserve existing user resources, source runs and historical attempt artifacts."
+  },
+  "evidence": [
+    "Exact repository/package/service/build identities, origins and authorized account/fixture/budget.",
+    "Pinned input bytes, source/compiled program, producer and consumer executions, fit origin/digest, baseline and saved identity.",
+    "Complete pages/rows and independent coefficients, means, predictions and scoring assertions under declared tolerances.",
+    "Measured fit/execution/publication effects. Missing telemetry is unknown, never zero.",
+    "Separate native/API-SDK, natural-conversation and actual Portal browser verdicts, with a different reviewer."
+  ],
+  "non_goals": [
+    "No API Playground or installed MCP campaigns in this slice.",
+    "No automatic migration, cleanup, source substitution, rounded-value reconstruction or hidden refitting.",
+    "No passing grade from unit tests, source review, a merged PR or another model family.",
+    "No changes to frozen catalogues, historical verdicts or the original ENG-3217 evidence."
+  ]
+}
