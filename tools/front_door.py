@@ -19,9 +19,13 @@ import sys
 from urllib.parse import urlsplit
 
 # Platform's public/reference/discovery/asset-identity paths and Files workers.
+# Saved Models are Platform application resources; native execution fit reads
+# remain on Backend under /studies/executions/.../model-fits.
 PLATFORM_PATHS = (
     "/api/v1/files*",
     "/api/v1/space*",
+    "/api/v1/models",
+    "/api/v1/models/*",
     "/internal/document-*",
     "/internal/dataset-preparations/*",
     "/internal/web-research/*",
