@@ -714,6 +714,7 @@ def prepare_platform(
         "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
         "EPOCH_FILES_LOCAL_ROOT": str(project / "personal_content"),
         "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
+        "EPOCH_MODEL_EXPORT_SERVER_URL": f"http://127.0.0.1:{BACKEND_PORT}",
         "EPOCH_REFERENCE_LOCAL_ROOT": str(reference_root),
         **files_access,
     })

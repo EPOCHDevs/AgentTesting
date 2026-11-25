@@ -203,3 +203,48 @@ The native source checkpoint is Backend `be5467e01b`. This is an engineering
 qualification helper, not a campaign grade or Platform Save/AI/Portal acceptance.
 Refer to the tracker and native validation receipt for the precise binary scope;
 a later schema-3 compatibility guard received its own focused regression gates.
+
+## Platform-owned executable journey
+
+The intermediate Backend-hosted `http_owned.py` Save entry point is retired. Its
+execution/Arrow helpers remain for native provenance checks; historical receipts
+keep their original scope. New saves use the generated `epoch_sdk.models_api`
+client against Platform. Native is used for computation and only the explicit
+server-held export capability, never as a cloud application catalogue.
+
+`platform_owned.py` takes explicit absolute fixture/evidence/token/root paths and
+separate loopback Native/Platform origins. It never launches a service, changes
+the shared stack or calls an LLM/vendor. Use a fresh evidence directory per
+producer attempt and preserve failed directories. Numerical execution UUIDs and
+Save request identities are written before submission; stop on unknown outcomes.
+
+- `produce`: owned OLS fit/holdout, exact continuation, full rational oracle,
+  retained one-fit/zero-refit audit, exact Platform Save and eight equal concurrent
+  retries, copied-byte identity and zero Save numerical executions.
+- `offline`: after the operator stops only the recorded private Native process
+  and actually restarts private Platform, prove list/read/equal Save retry from
+  independent copies with the Native socket closed. Preserve both service launch
+  receipts and the changed Platform PID; the driver does not manufacture a restart.
+- `consume`: after the operator restarts the qualified private Native, reuse the
+  exact saved reference and manifest pin and compare every prediction/baseline/
+  score. Optional `--remove-native-sources` renames only fixture-root source models
+  and producer execution into retained evidence backups before use. It does not
+  delete originals or cross into another root.
+- `authored`: a separate producer with two temporary fits and only one explicit
+  `save_as`; repeated Platform completion saves only that chosen fit. This checks
+  the real completion endpoint, not cloud acceptance-worker recovery, which needs
+  its separate cloud scenario.
+
+`family_http.py` runs each actually implemented immutable-artifact family (HMM,
+ARIMA, GARCH) separately. `families.py` supplies a deterministic owned 200-row
+relation, a 160-row training block and a disjoint 40-row observed block. Each
+family checks full Arrow pages, exact continuation/saved-copy replay, all-row input
+identity, family invariants and one producer fit/zero consumer fits. ARIMA(0,1,0)
+also has an independent closed-form drift/prediction oracle. This is not an
+independent HMM/GARCH estimation oracle, forecast/parameter-table qualification,
+AI/Portal acceptance or direct-S3 proof. PCA/scalers/clustering remain explicit
+unsupported saved-artifact paths until native advertises and implements them.
+
+No driver result is a campaign grade. The campaign ledger must link the actual
+service/package/source receipts and keep the API/SDK, conversation, browser,
+direct-S3 and family-capability verdicts separate.

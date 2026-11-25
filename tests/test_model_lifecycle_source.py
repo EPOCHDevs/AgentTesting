@@ -12,12 +12,13 @@ class ModelLifecycleSourceTest(unittest.TestCase):
     def test_fit_and_consumption_have_distinct_explicit_origins(self):
         fitted = fixture_source(FIXTURE, stage='fit')
         continued = fixture_source(FIXTURE, stage='continue', producer_execution='original-run')
-        saved = fixture_source(FIXTURE, stage='saved', model_ref='model_' + 'a' * 64)
+        saved = fixture_source(FIXTURE, stage='saved', model_ref='model_' + 'a' * 64, model_manifest_sha256='b' * 64)
         self.assertEqual(fitted.count('= ols_fit('), 1)
         self.assertNotIn('ols_fit(', continued)
         self.assertNotIn('ols_fit(', saved)
         self.assertIn('fit_execution_id="original-run"', continued)
         self.assertNotIn('fit_execution_id=', saved)
+        self.assertIn('model_manifest_sha256="' + 'b' * 64 + '"', saved)
         for source in (fitted, continued, saved):
             self.assertIn('response_table(name="predictions"', source)
             self.assertIn('response_table(name="scores"', source)
@@ -31,7 +32,9 @@ class ModelLifecycleSourceTest(unittest.TestCase):
         for kwargs in ({'stage': 'continue'}, {'stage': 'saved', 'producer_execution': 'run'},
                        {'stage': 'fit', 'producer_execution': 'run'},
                        {'stage': 'continue', 'producer_execution': 'bad\nrun'},
-                       {'stage': 'fit', 'model_ref': 'bad")\nnew_fit('}):
+                       {'stage': 'fit', 'model_ref': 'bad")\nnew_fit('},
+                       {'stage': 'saved'}, {'stage': 'fit', 'model_manifest_sha256': 'b' * 64},
+                       {'stage': 'saved', 'model_manifest_sha256': 'latest'}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 fixture_source(FIXTURE, **kwargs)
 

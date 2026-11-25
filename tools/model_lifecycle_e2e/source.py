@@ -21,13 +21,20 @@ Stage = Literal["fit", "continue", "saved"]
 
 
 def fixture_source(path: Path, *, stage: Stage, model_ref: str = "owned_fixture",
-                   producer_execution: str | None = None) -> str:
+                   producer_execution: str | None = None, model_manifest_sha256: str | None = None,
+                   save_as: str | None = None) -> str:
     if stage not in ("fit", "continue", "saved"):
         raise ValueError("Unknown fixture stage")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,254}", model_ref):
         raise ValueError("Use the exact native local-fit or saved-model reference")
     if (stage == "continue") != (producer_execution is not None):
         raise ValueError("Only an execution-fit continuation requires its original producer")
+    if (stage == 'saved') != (model_manifest_sha256 is not None):
+        raise ValueError('Saved-resource consumption requires its exact Platform manifest pin')
+    if model_manifest_sha256 is not None and not re.fullmatch(r'[a-f0-9]{64}', model_manifest_sha256):
+        raise ValueError('Use the exact immutable saved manifest SHA-256')
+    if save_as is not None and (stage != 'fit' or not save_as or len(save_as.encode()) > 255 or any(ord(c) < 32 for c in save_as)):
+        raise ValueError('Only fitting may carry an explicit bounded authored Save name')
     if producer_execution is not None and (not producer_execution or len(producer_execution) > 256
                                            or any(ord(char) < 32 for char in producer_execution)):
         raise ValueError("The original producer execution is invalid")
@@ -73,15 +80,18 @@ x = series(raw.rows.coordinate, raw.rows.feature)
 y = series(raw.rows.coordinate, raw.rows.target)
 ''' % json.dumps(query)
     if stage == "fit":
+        save_intent = f', save_as={json.dumps(save_as)}' if save_as is not None else ''
         source += f'''train_x = clip_window(window=SourceWindow(start="{min(train)}", end="{max(train)}"))(x)
 train_y = clip_window(window=SourceWindow(start="{min(train)}", end="{max(train)}"))(y)
-fit = ols_fit(model_ref={json.dumps(model_ref)})(train_x, target=train_y, training_source_coordinate=index_of(train_y))
+fit = ols_fit(model_ref={json.dumps(model_ref)}{save_intent})(train_x, target=train_y, training_source_coordinate=index_of(train_y))
 '''
     scored_dates = holdout if stage == "fit" else continuation
     source += f'''score_x = clip_window(window=SourceWindow(start="{min(scored_dates)}", end="{max(scored_dates)}"))(x)
 score_y = clip_window(window=SourceWindow(start="{min(scored_dates)}", end="{max(scored_dates)}"))(y)
 '''
     origin = f", fit_execution_id={json.dumps(producer_execution)}" if producer_execution else ""
+    if model_manifest_sha256 is not None:
+        origin = f', model_manifest_sha256={json.dumps(model_manifest_sha256)}'
     source += f"scored = ols_infer(model_ref={json.dumps(model_ref)}{origin})(score_x)\n"
     source += '''scored_rows = relation(columns=("coordinate", "prediction", "baseline", "actual"))(
     index_of(scored.prediction), scored.prediction, scored.baseline, score_y)
@@ -108,9 +118,12 @@ def main() -> None:
     parser.add_argument("--stage", choices=("fit", "continue", "saved"), required=True)
     parser.add_argument("--model-ref", default="owned_fixture")
     parser.add_argument("--producer-execution")
+    parser.add_argument('--model-manifest-sha256')
+    parser.add_argument('--save-as')
     args = parser.parse_args()
     print(fixture_source(args.fixture, stage=args.stage, model_ref=args.model_ref,
-                         producer_execution=args.producer_execution))
+                         producer_execution=args.producer_execution, model_manifest_sha256=args.model_manifest_sha256,
+                         save_as=args.save_as))
 
 
 if __name__ == "__main__":

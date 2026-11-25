@@ -1,4 +1,4 @@
-"""Opt-in engineering journey through an explicitly selected loopback Backend.
+"""Shared native execution/Arrow helpers; the intermediate Save driver is retired.
 
 Uses the installed generated native SDK and synthetic owned fixture only. This
 does not create a campaign, call an LLM, deploy services or alter a shared stack.
@@ -7,14 +7,10 @@ stop the driver instead of resubmitting work. Retain a failed evidence directory
 """
 from __future__ import annotations
 
-import argparse
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date
-import hashlib
 import json
 from pathlib import Path
 import time
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -23,8 +19,6 @@ import pyarrow.ipc as ipc
 from stratifyx import DataOption, DatePeriodConfig, RuntimeProfile, StratifyX
 
 from .native_results import assert_tables
-from .oracle import expected
-from .source import fixture_source
 
 OPTIONS = {"max_retries": 0}
 
@@ -103,111 +97,11 @@ def execute(client: StratifyX, source: str, name: str, root: Path, dispatch: str
     return created.id, execution
 
 
-def journey(url: str, token_file: Path, fixture: Path, root: Path, save_name: str,
-            producer_execution: str | None = None) -> dict:
-    parsed = urlsplit(url)
-    if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}
-            or parsed.username or parsed.password or parsed.path not in {"", "/"}
-            or parsed.query or parsed.fragment):
-        raise ValueError("Choose the explicit loopback task Backend origin")
-    if not root.is_absolute():
-        raise ValueError("Choose a new absolute owned evidence directory")
-    root.mkdir(mode=0o700)
-    token = json.loads(token_file.read_text())["id_token"]
-    oracle = expected(fixture)
-    fit_source = fixture_source(fixture, stage="fit")
-    with httpx.Client(timeout=90, trust_env=False) as transport:
-        client = StratifyX(base_url=url.rstrip("/"), token=token,
-                           httpx_client=transport, follow_redirects=False)
-        original_saved = client.saved_models.list_explicitly_saved_models_with_bounded_metadata_pages(
-            limit=100, request_options=OPTIONS)
-        if original_saved.items or original_saved.next_cursor:
-            raise ValueError("Use the private empty fixture account/store, not an existing model library")
-        if producer_execution is None:
-            _, producer_execution = execute(client, fit_source, "Owned OLS producer", root / "fit")
-        else:
-            (root / "fit").mkdir()
-        original = client.studies_executions.get_the_per_execution_study_snapshot_as_run_source_assets_screen(
-            producer_execution, request_options=OPTIONS)
-        if original.study.source != fit_source:
-            raise AssertionError("The selected original producer is not this exact owned fixture")
-        fits = client.saved_models.list_reusable_fits_from_an_owned_completed_producer(
-            producer_execution, limit=10, request_options=OPTIONS)
-        if len(fits.items) != 1 or fits.next_cursor or fits.items[0].model_ref != "owned_fixture":
-            raise AssertionError("Select exactly the owned producer's declared reusable fit")
-        selected = fits.items[0]
-        digest = selected.digest
-        fit_pages = table_answers(client, producer_execution, root / "fit", oracle["holdout"])
-        _, continuation = execute(client, fixture_source(fixture, stage="continue",
-                                  producer_execution=producer_execution), "Owned exact continuation", root / "continue")
-        continuation_pages = table_answers(client, continuation, root / "continue", oracle["continuation"])
-        if client.saved_models.list_reusable_fits_from_an_owned_completed_producer(
-                continuation, request_options=OPTIONS).items:
-            raise AssertionError("Continuation unexpectedly produced a new fit")
-        if client.saved_models.list_explicitly_saved_models_with_bounded_metadata_pages(
-                limit=1, request_options=OPTIONS).items:
-            raise AssertionError("Fitting or continuing populated the saved catalogue")
-        before_save = client.studies_executions.list_executions(request_options=OPTIONS)
-        write(root / "save-intent.json", {"source_execution_id": producer_execution,
-              "fit_name": "owned_fixture", "expected_digest": digest, "name": save_name})
-
-        def save():
-            return client.saved_models.save_one_exact_fit_from_an_owned_completed_execution_without_refitting(
-                source_execution_id=producer_execution, fit_name="owned_fixture",
-                expected_digest=digest, name=save_name, request_options=OPTIONS)
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            left, right = list(pool.map(lambda _: save(), range(2)))
-        repeated = save()
-        if (left != right or left != repeated or left.summary.digest != digest
-                or left.artifact.summary.digest != digest
-                or left.producer.execution_id != producer_execution or left.producer.study.source != fit_source):
-            raise AssertionError("Equal Save calls changed identity, fitted state or pinned provenance")
-        if client.studies_executions.list_executions(request_options=OPTIONS) != before_save:
-            raise AssertionError("Saving launched numerical work")
-        (root / "saved-detail.json").write_text(left.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n")
-        saved_ref = left.summary.model_ref
-    # A new HTTP client has no in-memory selection state to inherit.
-    with httpx.Client(timeout=90, trust_env=False) as transport:
-        client = StratifyX(base_url=url.rstrip("/"), token=token, httpx_client=transport, follow_redirects=False)
-        reopened = client.saved_models.read_an_exact_saved_model_and_its_pinned_producer_study(
-            saved_ref, request_options=OPTIONS)
-        if reopened != left:
-            raise AssertionError("Reopened saved model differs from its accepted receipt")
-        _, consumer = execute(client, fixture_source(fixture, stage="saved", model_ref=saved_ref),
-                              "Owned saved-model consumer", root / "saved")
-        saved_pages = table_answers(client, consumer, root / "saved", oracle["continuation"])
-        if client.saved_models.list_reusable_fits_from_an_owned_completed_producer(
-                consumer, request_options=OPTIONS).items:
-            raise AssertionError("Saved-model consumption unexpectedly produced a fit")
-        page = client.saved_models.list_explicitly_saved_models_with_bounded_metadata_pages(
-            limit=1, request_options=OPTIONS)
-        if page.next_cursor or len(page.items) != 1 or page.items[0] != left.summary:
-            raise AssertionError("The saved catalogue does not identify the single accepted resource")
-    receipt = {"boundary": "generated Python SDK and real authenticated local HTTP",
-               "producer_execution": producer_execution, "continuation_execution": continuation,
-               "saved_consumer_execution": consumer, "saved_ref": saved_ref, "digest": digest,
-               "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
-               "page_sizes": {"holdout": fit_pages, "continuation": continuation_pages, "saved": saved_pages},
-               "concurrent_and_repeated_save": "same accepted identity; zero additional execution identities",
-               "pending": ["retained HTTP fit-event audit", "source cleanup/restart", "saved-Study scope HTTP",
-                           "TypeScript HTTP", "Space/AI/Portal", "new pinned SPY scenario"]}
-    write(root / "receipt.json", receipt)
-    return receipt
-
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend-url", required=True)
-    parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--fixture", type=Path, default=Path(__file__).parent / "fixtures/owned-observed-predictor.csv")
-    parser.add_argument("--token-file", type=Path, default=Path.home() / ".config/epoch-agent-testing/local-login.json")
-    parser.add_argument("--save-name", required=True)
-    parser.add_argument("--producer-execution", help="Reuse an already accepted exact owned fixture; never refit it")
-    args = parser.parse_args()
-    result = journey(args.backend_url, args.token_file, args.fixture, args.evidence,
-                     args.save_name, args.producer_execution)
-    print(json.dumps(result, indent=2))
+    raise SystemExit("The intermediate Backend-owned saved-model driver is retired. "
+        "Use tools.model_lifecycle_e2e.platform_owned with explicit Native and Platform origins. "
+        "Historical receipts remain evidence for their original cut only.")
 
 
 if __name__ == "__main__":
