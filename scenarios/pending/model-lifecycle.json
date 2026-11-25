@@ -27,7 +27,7 @@
       "requires": [
         "ENG-2755"
       ],
-      "acceptance": "Multiple fits require selection. Stale expected digests conflict; wrong-owner, missing/corrupt state, feature/options and producer-provenance mismatches fail without replacement work. Pause fixture-owned publication boundaries, retry the same intent after source loss and prove the exact accepted digest and pinned source survive. A lost private payload cannot fall back to a different published model."
+      "acceptance": "Multiple fits require selection. Wrong owner, missing or corrupt artifacts, digest or stale expected-digest mismatches, changed immutable producer bindings, incompatible feature count or native numeric ABI, required model-option mismatches and unsupported requested capabilities fail without replacement work. Differences in recorded feature recipes, declared units, cadence and known feature ordering remain advisory; preserve authored order and values. Pause fixture-owned publication boundaries, retry the same intent after source loss and prove the exact accepted digest and pinned source survive. A lost private payload cannot fall back to a different published model."
     },
     {
       "id": "RE04-space-fresh-chat",

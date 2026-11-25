@@ -64,9 +64,14 @@ The future live driver must retain, in the selected campaign attempt:
    conversational and Portal UI verdicts.
 
 Also qualify multiple-fit selection, wrong-owner/missing/corrupt references,
-option/feature incompatibility, same-name shadowing, interrupted Save, source
-change/restart and captured dependencies. Native OLS tests cover invalid numeric
-and tuple-validity cases; those passes do not certify public transport or UI.
+digest and stale expected-digest mismatches, changed immutable producer bindings,
+incompatible feature count or native numeric ABI, required model-option mismatches,
+unsupported requested capabilities, same-name shadowing, interrupted Save, source
+change/restart and captured dependencies. Those integrity failures must not start
+replacement work. Differences in recorded feature recipes, declared units, cadence
+and known feature ordering remain advisory; preserve authored order and values.
+Native OLS tests cover invalid numeric and tuple-validity cases; those passes do
+not certify public transport or UI.
 
 After this deterministic slice passes, run a new pinned-data SPY journey with the
 original natural follow-up. Preserve the original ENG-3217 attempt. Its historical
