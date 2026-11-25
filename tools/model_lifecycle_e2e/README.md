@@ -252,3 +252,11 @@ unsupported saved-artifact paths until native advertises and implements them.
 No driver result is a campaign grade. The campaign ledger must link the actual
 service/package/source receipts and keep the API/SDK, conversation, browser,
 direct-S3 and family-capability verdicts separate.
+
+`notebook.py` creates (and does not execute) a separate saved-model scoring
+notebook from a passed API receipt. An explicit Run admits one new scoring-only
+execution through the installed native SDK, reads the exact Platform model pins,
+checks every owned prediction/baseline/score, and requires retained zero-fit
+telemetry. It stops if its evidence directory already exists, preserving unknown
+outcomes rather than resubmitting. The executed notebook and its receipt are a
+separate channel verdict, not an AI/Portal/cloud acceptance claim.
