@@ -104,7 +104,9 @@ def produce(args) -> None:
             'owner': owner, 'dispatch': args.dispatch, 'definition_id': definition,
             'producer_execution': producer, 'continuation_execution': continuation,
             'model_ref': saved.model_ref, 'digest': digest, 'manifest_sha256': saved.manifest_sha256,
-            'native_url': native_url, 'platform_url': platform_url, 'platform_pid_before_restart': platform_launch['pid'], 'fit_count': 1, 'continuation_fit_count': 0,
+            'native_url': native_url, 'native_root': str(args.native_root), 'platform_url': platform_url,
+            'fixture_sha256': hashlib.sha256(args.fixture.read_bytes()).hexdigest(),
+            'platform_pid_before_restart': platform_launch['pid'], 'fit_count': 1, 'continuation_fit_count': 0,
             'concurrent_equal_saves': len(repeats), 'save_numerical_executions': 0})
 
 

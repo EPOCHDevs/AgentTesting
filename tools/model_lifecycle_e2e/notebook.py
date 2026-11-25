@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-def notebook(repo: Path, receipt: Path, evidence: Path, output: Path) -> None:
+def notebook(repo: Path, receipt: Path, evidence: Path, output: Path, kernel_name: str = 'python3') -> None:
     if not all(path.is_absolute() for path in (repo, receipt, evidence, output)):
         raise ValueError('Use exact absolute repository, receipt, evidence and notebook paths')
     if output.exists() or evidence.exists():
@@ -33,12 +33,17 @@ so an uncertain execution is inspected instead of resubmitted.
     cell('code', f'''from pathlib import Path
 import sys
 from importlib.metadata import version
+import epoch_sdk
+import stratifyx
 
 repo = Path({str(repo)!r})
 receipt_path = Path({str(receipt)!r})
 evidence = Path({str(evidence)!r})
 sys.path.insert(0, str(repo))
-print({{"native_sdk": version("stratifyx"), "shared_sdk": version("epoch-sdk")}})
+runtime = {{"python_executable": sys.executable, "python_version": sys.version,
+    "native_sdk": {{"version": version("stratifyx"), "module": stratifyx.__file__}},
+    "shared_sdk": {{"version": version("epoch-sdk"), "module": epoch_sdk.__file__}}}}
+print(runtime)
 ''')
     cell('code', '''import json
 import httpx
@@ -57,7 +62,7 @@ platform_url = loopback(original["platform_url"])
 token, owner = caller(Path.home() / ".config/epoch-agent-testing/local-login.json")
 assert owner == original["owner"]
 fixture = repo / "tools/model_lifecycle_e2e/fixtures/owned-observed-predictor.csv"
-native_root = receipt_path.parent.parent / "native-export-server"
+native_root = Path(original["native_root"])
 ''')
     cell('code', '''assert not evidence.exists(), "Inspect the retained attempt before any further execution"
 with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(timeout=30, trust_env=False) as model_http:
@@ -71,13 +76,13 @@ with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(tim
     _, execution = execute(native, source, "Notebook exact saved OLS scoring", evidence, original["dispatch"])
     table_answers(native, execution, evidence, expected(fixture)["continuation"])
     effects(native_root, owner, execution, 0, evidence / "fit-effects.json")
-write(evidence / "notebook-receipt.json", {"status": "passed", "execution_id": execution,
+write(evidence / "notebook-receipt.json", {"status": "passed", "execution_id": execution, "runtime": runtime,
     "model_ref": original["model_ref"], "digest": original["digest"], "manifest_sha256": original["manifest_sha256"],
     "fit_count": 0, "scope": "real notebook API/SDK numerical scoring; owned fixture; no AI/Portal/direct-S3 claim"})
 print({"status": "passed", "execution_id": execution, "fit_count": 0})
 ''')
     output.write_text(json.dumps({'nbformat': 4, 'nbformat_minor': 5, 'metadata': {
-        'kernelspec': {'display_name': 'Python 3', 'language': 'python', 'name': 'python3'},
+        'kernelspec': {'display_name': kernel_name, 'language': 'python', 'name': kernel_name},
         'language_info': {'name': 'python', 'version': '3.12'}}, 'cells': cells}, indent=2) + '\n')
 
 
@@ -87,8 +92,9 @@ def main() -> None:
     parser.add_argument('--receipt', type=Path, required=True)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--kernel-name', default='python3', help='Exact installed/private kernel to execute this notebook')
     args = parser.parse_args()
-    notebook(args.repo, args.receipt, args.evidence, args.output)
+    notebook(args.repo, args.receipt, args.evidence, args.output, args.kernel_name)
 
 
 if __name__ == '__main__': main()
