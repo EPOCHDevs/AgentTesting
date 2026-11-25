@@ -25,9 +25,10 @@ saves, replaces or deletes a model. It verifies every prediction, stored trainin
 baseline and score against the independent owned-fixture oracle, then audits
 the completed execution's retained fit events.
 
-Use the exact installed versioned SDKs and the qualified private services. Login
-uses the normal AgentTesting token cache; credentials are never printed or saved
-in this notebook. Rerunning a submitted cell stops on its existing evidence path
+Use the exact installed versioned SDKs and the root-admitted primary services.
+Only the maintained source-pinned opaque get_id_token provider is called; no
+token/cache/claims/profile inspection occurs here. Credentials are never printed
+or saved in this notebook. Rerunning a submitted cell stops on its evidence path
 so an uncertain execution is inspected instead of resubmitted.
 ''')
     cell('code', f'''from pathlib import Path
@@ -46,10 +47,12 @@ runtime = {{"python_executable": sys.executable, "python_version": sys.version,
 print(runtime)
 ''')
     cell('code', '''import json
+import hashlib
 import httpx
 from epoch_sdk.models_api import EpochModels
 from stratifyx import StratifyX
-from tools.model_lifecycle_e2e.platform_owned import caller, loopback
+from tools.model_lifecycle_e2e.platform_owned import loopback
+from tools.model_lifecycle_e2e.opaque_auth import caller, admit_primary
 from tools.model_lifecycle_e2e.http_owned import execute, table_answers, write
 from tools.model_lifecycle_e2e.platform_owned import effects
 from tools.model_lifecycle_e2e.oracle import expected
@@ -59,10 +62,13 @@ original = json.loads(receipt_path.read_text())
 assert original["status"] == "passed", "Qualify the API journey before the notebook"
 native_url = loopback(original["native_url"])
 platform_url = loopback(original["platform_url"])
-token, owner = caller(Path.home() / ".config/epoch-agent-testing/local-login.json")
-assert owner == original["owner"]
 fixture = repo / "tools/model_lifecycle_e2e/fixtures/owned-observed-predictor.csv"
 native_root = Path(original["native_root"])
+assert hashlib.sha256(fixture.read_bytes()).hexdigest() == original["fixture_sha256"]
+admit_primary(Path(original["root_readiness"]), original["root_readiness_sha256"],
+    native_url=native_url, platform_url=platform_url, native_root=native_root,
+    expected_owner=original["owner"])
+token, owner = caller(original["owner"])
 ''')
     cell('code', '''assert not evidence.exists(), "Inspect the retained attempt before any further execution"
 with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(timeout=30, trust_env=False) as model_http:
@@ -70,6 +76,8 @@ with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(tim
     selected = models.read_model(original["model_ref"], request_options={"max_retries": 0})
     assert selected.model.digest == original["digest"]
     assert selected.model.manifest_sha256 == original["manifest_sha256"]
+    assert selected.model.producer_execution_id == original["producer_execution"]
+    assert selected.manifest.get("owner_user_id") == owner
     source = fixture_source(fixture, stage="saved", model_ref=selected.model.model_ref,
         model_manifest_sha256=selected.model.manifest_sha256)
     native = StratifyX(base_url=native_url, token=token, httpx_client=native_http, follow_redirects=False)

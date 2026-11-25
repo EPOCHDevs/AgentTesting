@@ -62,7 +62,8 @@ def table_answers(client: StratifyX, execution: str, root: Path, reference: dict
     return page_sizes
 
 
-def execute(client: StratifyX, source: str, name: str, root: Path, dispatch: str = "inprocess") -> tuple[str, str]:
+def execute(client: StratifyX, source: str, name: str, root: Path, dispatch: str = "inprocess",
+            *, checkpoint_only: bool = False) -> tuple[str, str]:
     root.mkdir()
     (root / "source.epoch").write_text(source)
     execution = str(uuid4())
@@ -73,10 +74,15 @@ def execute(client: StratifyX, source: str, name: str, root: Path, dispatch: str
         name=name, source=source, request_options=OPTIONS)
     intent.update(definition_id=created.id, stage="execute")
     write(root / "intent.json", intent)
-    accepted = client.studies_executions.start_execute_a_study(
-        id=created.id, execution_id=execution,
-        period=DatePeriodConfig(start=date(2022, 1, 1), end=date(2025, 1, 31)),
-        runtime=RuntimeProfile(dispatch=dispatch), request_options=OPTIONS)
+    if checkpoint_only:
+        accepted = client.studies_executions.start_execute_a_study(
+            id=created.id, execution_id=execution,
+            runtime=RuntimeProfile(dispatch=dispatch), request_options=OPTIONS)
+    else:
+        accepted = client.studies_executions.start_execute_a_study(
+            id=created.id, execution_id=execution,
+            period=DatePeriodConfig(start=date(2022, 1, 1), end=date(2025, 1, 31)),
+            runtime=RuntimeProfile(dispatch=dispatch), request_options=OPTIONS)
     if accepted.id != execution:
         raise AssertionError("Native execution identity differs from the retained launch intent")
     intent.update(stage="poll", accepted=True)

@@ -318,3 +318,63 @@ same selected digest and cutoff, comparison of every scalar against the oracle,
 and retained zero-fit/effect evidence. Observed40-row `*_infer` replay cannot
 stand in for that gate. HMM remains separately qualified by its explicit causal
 versus retrospective operation; no HMM forecast oracle is supplied here.
+
+`family_consumers.py` wires the next actual cases, without producing, saving or
+cleaning up a fit. Each invocation is one explicit temporary, saved or
+post-cleanup stage. ARIMA/GARCH use empty-input checkpoint operations at1,2,5,21,
+retain four declared SQL/Arrow rows, check all scalar values against the oracle,
+and require zero-fit telemetry and the actual compiled checkpoint contracts.
+The checkpoint launch omits an application period. Existing observed drivers
+keep their previous explicit period. HMM instead runs two consumers of the same
+fit with the same first five observations and different suffixes, verifies the
+full probability rows and checks sealed direct/effective `ObservedCausal` mode.
+
+The driver is inactive without an actual root-issued case admission and explicit
+`--execute`. A case admission has kind
+`ROOT_ADMITTED_MODEL_LIFECYCLE_CONSUMER_V1`, `ready=true` and exact source/origin,
+storage-root, owner, producer/fit/digest/config/source/cutoff and selected saved
+pins. It references the actual descriptor and primary runtime packet by absolute
+path and SHA-256. The referenced runtime packet has kind
+`ROOT_ADMITTED_PRIMARY_MODEL_LIFECYCLE_RUNTIME_V1`, `ready=true`, and matching
+`native_url`, `platform_url`, `native_root`, `native_source`, `owner_user_id`.
+Root must derive these records from the actual started/served primary stack;
+source qualification or this schema description cannot act as readiness.
+
+The descriptor's actual storage location is preserved. Shared storage also needs
+an exact completed-generation witness; post-cleanup needs the actual root-admitted
+supported cleanup witness. The oracle artifact bytes must match the same digest
+and native manifest. The actual selected temporary or saved metadata is read
+before a consumer is launched. The driver retains every execution UUID before
+its write and does not resubmit unknown outcomes or an existing attempt.
+
+Credentials come only from the root-pinned maintained primary
+`EpochAI/tools/cognito_auth.py` `get_id_token()` callable. The driver keeps its
+opaque result in memory, inspects no JWT/profile/groups/cache, and stops if the
+provider returns None. Expected owner comes from the actual owned producer and
+artifact joins. There is no token-file, login, private identity or registry
+fallback. The local driver does not claim remote/deployed-IAM, natural AI,
+Portal, source-cleanup execution or campaign acceptance.
+
+`owned_primary.py` is the actual primary OLS producer/continuation/explicit
+Save/saved-consumer entry point. It requires the same actual root readiness
+packet, an explicit expected owner and `--execute`. It uses only the pinned
+opaque provider, joins that expected owner to the actual new producer/artifact
+and saved facts, and checks full owned numerical rows and retained1/0/0 fits.
+It snapshots the existing bounded saved catalogue instead of requiring it to
+be empty. It does not use private launch-PID files, stop/restart shared services,
+detach source directories or claim source-cleanup/S3 independence. Those require
+their separately admitted stages and witnesses.
+
+The original private `platform_owned` and `family_http` entry points now also
+require explicit expected-owner/root-readiness inputs and use that opaque
+credential boundary. Their older private restart/detach assumptions remain
+restricted; historical receipt paths are not permission to apply them to the
+primary stack. Generated notebooks consume a newly passed admitted-primary API
+receipt, recheck its fixture/resource pins and use the same opaque provider.
+Existing executed notebooks and all older receipts remain unchanged.
+
+The optional lost-response fixture deliberately observes one real successful
+Save response and withholds it only from its fixture client. It first reconciles
+that observed identity with an ordinary read before any known equal retry.
+Genuinely unknown real outcomes stop all writes. This is not a shared proxy,
+host failure injection, worker-recovery test or automatic request retry loop.
