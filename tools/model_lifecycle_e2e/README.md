@@ -225,11 +225,15 @@ Save request identities are written before submission; stop on unknown outcomes.
   and actually restarts private Platform, prove list/read/equal Save retry from
   independent copies with the Native socket closed. Preserve both service launch
   receipts and the changed Platform PID; the driver does not manufacture a restart.
+- `detach`: while the recorded private Native is still stopped, rename its original
+  model payloads and producer execution into retained evidence backups. The root
+  must be the exact sibling `native-export-server` fixture and match its launch
+  receipt. Original resources are preserved; the primary checkout is excluded.
 - `consume`: after the operator restarts the qualified private Native, reuse the
   exact saved reference and manifest pin and compare every prediction/baseline/
-  score. Optional `--remove-native-sources` renames only fixture-root source models
-  and producer execution into retained evidence backups before use. It does not
-  delete originals or cross into another root.
+  score. `--remove-native-sources` requires the prior explicit detach receipt; it never
+  renames sources beneath a running Native server or infers a cold start. Record
+  the actual changed Native PID after detaching and restarting.
 - `authored`: a separate producer with two temporary fits and only one explicit
   `save_as`; repeated Platform completion saves only that chosen fit. This checks
   the real completion endpoint, not cloud acceptance-worker recovery, which needs

@@ -159,19 +159,38 @@ def offline(args) -> None:
         'model_ref': receipt['model_ref'], 'digest': receipt['digest'], 'manifest_sha256': receipt['manifest_sha256']})
 
 
+def detach(args) -> None:
+    assert (args.evidence / 'offline-restart.json').is_file(), 'Prove independent offline reads before detaching source'
+    receipt = json.loads((args.evidence / 'receipt.json').read_text())
+    parsed = urlsplit(loopback(args.native_url))
+    with socket.socket() as probe:
+        assert probe.connect_ex((parsed.hostname, parsed.port)) != 0, 'Detach only while the explicitly owned Native server is stopped'
+    root = args.native_root.resolve()
+    if root.parent != args.evidence.resolve().parent or root.name != 'native-export-server':
+        raise ValueError('Source-detach proof is restricted to the exact sibling private native-export-server fixture')
+    launch = json.loads((root.parent / 'native-export-launch.json').read_text())
+    assert Path(launch['storage_root']).resolve() == root and launch['port'] == parsed.port
+    _, owner = caller(args.token_file)
+    assert owner == receipt['owner']
+    backup = args.evidence / 'original-sources-retained'
+    backup.mkdir()
+    personal = root / 'personal_content' / 'owners' / owner.encode().hex()
+    (personal / 'models/v1').rename(backup / 'native-models-v1')
+    (root / 'research_studies' / owner / receipt['producer_execution']).rename(backup / 'producer-execution')
+    write(args.evidence / 'source-detach.json', {'status': 'detached', 'native_port_closed': True,
+        'native_pid_before_restart': launch['pid'], 'backup': str(backup),
+        'preserved': ['native models/v1', 'original producer execution'],
+        'scope': 'exact private fixture resources moved with backups; no deletion'})
+
+
 def consume(args) -> None:
     receipt = json.loads((args.evidence / 'receipt.json').read_text())
     assert (args.evidence / 'offline-restart.json').is_file(), 'Qualify offline/restart reads first'
     token, owner = caller(args.token_file)
     assert owner == receipt['owner']
+    detached = args.evidence / 'source-detach.json'
     if args.remove_native_sources:
-        if not args.native_root.is_relative_to(args.evidence.parent):
-            raise ValueError('Source-removal proof is restricted to this explicit private fixture root')
-        backup = args.evidence / 'original-sources-retained'
-        backup.mkdir()
-        personal = args.native_root / 'personal_content' / 'owners' / owner.encode().hex()
-        (personal / 'models/v1').rename(backup / 'native-models-v1')
-        (args.native_root / 'research_studies' / owner / receipt['producer_execution']).rename(backup / 'producer-execution')
+        assert detached.is_file(), 'Run detach while the owned Native server is stopped, then restart before consumption'
     with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(timeout=30, trust_env=False) as model_http:
         models = EpochModels(base_url=loopback(args.platform_url), token=token, httpx_client=model_http, follow_redirects=False)
         facts = models.read_model(receipt['model_ref'])
@@ -189,7 +208,7 @@ def consume(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase', choices=['produce', 'authored', 'offline', 'consume'])
+    parser.add_argument('phase', choices=['produce', 'authored', 'offline', 'detach', 'consume'])
     parser.add_argument('--native-url', required=True)
     parser.add_argument('--platform-url', required=True)
     parser.add_argument('--native-root', type=Path, required=True)
@@ -201,7 +220,7 @@ def main() -> None:
     args = parser.parse_args()
     if not all(path.is_absolute() for path in (args.native_root, args.fixture, args.evidence, args.token_file)):
         raise ValueError('Use exact absolute private fixture/evidence paths')
-    {'produce': produce, 'authored': authored, 'offline': offline, 'consume': consume}[args.phase](args)
+    {'produce': produce, 'authored': authored, 'offline': offline, 'detach': detach, 'consume': consume}[args.phase](args)
 
 
 if __name__ == '__main__': main()
