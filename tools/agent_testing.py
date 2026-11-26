@@ -11,8 +11,10 @@ import argparse
 import asyncio
 import fcntl
 import json
+import math
 import os
 import re
+import sys
 import tempfile
 import tomllib
 from collections.abc import Iterator, Sequence
@@ -32,6 +34,7 @@ from tools import local_auth
 from tools.evidence import render_transcript, summarize
 from tools.evidence_redaction import redact_run
 from tools.traces import TraceWindow
+from tools.usage import DEFAULT_BUDGET_USD, read_usage, summary as usage_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 Environment = Literal["local", "local-up", "dev", "qa", "prod"]
@@ -67,6 +70,7 @@ class Status(TypedDict):
     pending: dict[str, object]
     runs: list[Run]
     environment: Environment
+    usage: NotRequired[dict[str, object]]
 
 
 class RunHistory(TypedDict):
@@ -364,6 +368,34 @@ class Conversation:
     def attempt(self) -> Attempt:
         return read_attempt(self.folder, self.config)
 
+    async def capture_usage(
+        self, bearer: str, *, before_submit: bool = False,
+        budget_usd: float | None = None,
+    ) -> dict[str, object]:
+        """Reuse the account usage API; never start or cancel agent work."""
+        attempt = self.attempt()  # Check the exact stack before reading usage.
+        path = self.folder / "usage.json"
+        previous = json.loads(path.read_text()) if path.exists() else {}
+        budget = budget_usd if budget_usd is not None else previous.get("budget_usd", DEFAULT_BUDGET_USD)
+        if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget <= 0:
+            raise ValueError("The scenario budget must be a positive finite USD amount.")
+        latest = await read_usage(self.config.backend_url, bearer)
+        baseline = previous.get("baseline")
+        if baseline is None and before_submit and not attempt.get("attached") and not any(self.folder.glob("turns/*/request.json")):
+            # Keep even a failed first read. A later post-launch read must not
+            # become a fabricated pre-launch baseline or reset after an answer.
+            baseline = latest
+        result = {
+            **usage_summary(baseline, latest, budget),
+            "baseline": baseline,
+            "latest": latest,
+        }
+        save(self.folder / "usage" / "reads" / f"{uuid4()}.json", latest)
+        save(path, result)
+        for warning in result["warnings"]:
+            print(f"Usage warning: {warning}", file=sys.stderr)
+        return result
+
     async def attach(
         self, thread_id: str, *, owner: str, scenario: str | None
     ) -> Status:
@@ -441,7 +473,7 @@ class Conversation:
             save(previous, receipt)
         return receipt
 
-    async def status(self) -> Status:
+    async def status(self, *, bearer: str | None = None) -> Status:
         attempt = self.attempt()
         thread, state, runs = await asyncio.gather(
             self.client.threads.get(attempt["thread_id"]),
@@ -456,6 +488,8 @@ class Conversation:
             "runs": [redact_run(run) for run in runs],
             "environment": self.config.environment,
         }
+        if bearer:
+            result["usage"] = await self.capture_usage(bearer)
         save(self.folder / "status.json", result)
         return result
 
@@ -468,6 +502,7 @@ class Conversation:
         owner: str,
         scenario: str | None,
         bearer: str,
+        budget_usd: float | None = None,
     ) -> Run:
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", key):
             raise ValueError(
@@ -583,6 +618,7 @@ class Conversation:
                 raise RuntimeError(
                     "Answer the pending questions before sending another user turn."
                 )
+            await self.capture_usage(bearer, before_submit=True, budget_usd=budget_usd)
             save(target / "stack.json", receipt)
             submission_id = str(uuid4())
             save(request_file, {**request, "submission_id": submission_id})
@@ -660,7 +696,7 @@ class Conversation:
             status, state, runs = None, None, []
             if follow:
                 try:
-                    status = await self.status()
+                    status = await self.status(bearer=bearer)
                     recent = status["runs"]
                     if not recent:
                         raise ValueError("No run is available to follow.")
@@ -700,7 +736,7 @@ class Conversation:
                         "error_type": type(error).__name__,
                     }
             try:
-                status = await self.status()
+                status = await self.status(bearer=bearer)
                 state = await self.client.threads.get_state(
                     attempt["thread_id"], subgraphs=True
                 )
@@ -832,6 +868,7 @@ class Conversation:
             return {
                 "environment": self.config.environment,
                 "status": status,
+                "usage": status.get("usage") if status else None,
                 "capture_status": "complete" if complete else "partial",
                 "metrics": summary,
                 "sources": sources,
@@ -965,9 +1002,10 @@ async def run(args: argparse.Namespace) -> object:
                 owner=args.owner,
                 scenario=args.scenario,
                 bearer=bearer,
+                budget_usd=getattr(args, "budget_usd", None),
             )
         if args.action == "status":
-            return await conversation.status()
+            return await conversation.status(bearer=bearer)
         if args.action == "attach":
             return await conversation.attach(
                 args.thread_id, owner=args.owner, scenario=args.scenario
@@ -1009,6 +1047,10 @@ def main() -> None:
             )
             command.add_argument("--owner", default="unassigned")
             command.add_argument("--scenario")
+            command.add_argument(
+                "--budget-usd", type=float,
+                help="Warning-only scenario budget (default: $20 for a new attempt; follow-ups retain its budget). Does not cancel runs.",
+            )
         if name == "ask":
             command.add_argument("message")
         if name == "answer":
@@ -1048,6 +1090,9 @@ def main() -> None:
                 help="Reviewed artifact path or issue link; repeatable",
             )
     args = parser.parse_args()
+    budget = getattr(args, "budget_usd", None)
+    if budget is not None and (not math.isfinite(budget) or budget <= 0):
+        parser.error("--budget-usd must be a positive finite amount")
     if hasattr(args, "attempt") and not re.fullmatch(
         r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}", args.attempt
     ):
@@ -1064,6 +1109,7 @@ def main() -> None:
             "thread_status": status["thread_status"],
             "pending": status["pending"],
             "runs": [run_receipt(item) for item in status["runs"]],
+            **({"usage": status["usage"]} if "usage" in status else {}),
         }
     elif args.action == "pull" and isinstance(result, dict):
         details = result["metrics"]
@@ -1083,6 +1129,7 @@ def main() -> None:
             },
             "observed_stream_model_calls": details["observed_model_calls"],
             "langsmith_reported_cost_usd": details["cost_usd"],
+            "usage": result.get("usage"),
         }
     print(
         result if isinstance(result, str) else json.dumps(result, indent=2, default=str)

@@ -8,6 +8,20 @@ import pytest
 from tools import agent_testing as app
 
 
+@pytest.mark.parametrize("amount", ["0", "-1", "nan", "inf"])
+def test_invalid_budget_is_rejected_before_auth_or_network(amount, monkeypatch):
+    async def forbidden(args):
+        raise AssertionError("Invalid budgets must not reach login or submission")
+
+    monkeypatch.setattr(app, "run", forbidden)
+    monkeypatch.setattr(sys, "argv", [
+        "agent_testing", "ask", "case-1", "--key", "first", "--budget-usd", amount, "Compare the businesses",
+    ])
+    with pytest.raises(SystemExit) as error:
+        app.main()
+    assert error.value.code == 2
+
+
 @pytest.mark.parametrize("action", ["ask", "answer", "status", "attach"])
 def test_cli_prints_status_and_questions_without_server_run_configuration(
     action, monkeypatch, capsys

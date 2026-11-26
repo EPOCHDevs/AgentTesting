@@ -292,6 +292,29 @@ from a later checkpoint. Stopping this local observer does not cancel the run.
 Evidence lives in ignored `.artifacts/<attempt>/`. `metrics.json` distinguishes
 observed token counts and server elapsed time from unknown model time/cost.
 
+Every scenario attempt has a **$20 soft budget**, shared across its follow-up
+turns. `ask --budget-usd AMOUNT` can set another warning-only target; `answer`
+retains the attempt's target unless explicitly changed. Budget observations
+never cancel a run or authorize a retry.
+
+The runner reuses `GET /api/v1/platform/usage` on the selected Backend origin
+with the existing sign-in. It captures a baseline immediately before the first
+submission, then refreshes usage before later submissions and on `status` and
+`pull`. `usage.json`, immutable `usage/reads/` snapshots, and the offline report
+retain the readings, credit changes and API allowance warnings. Reconnecting a
+turn never resets the baseline. An attached or previously started conversation
+has no pre-submission baseline; a failed first read stays visibly unavailable.
+
+This endpoint reports **account-wide weekly credits**, not USD. Other activity
+on that account can move the counters, and ingestion is asynchronous. The
+runner preserves the pricing version, provisional status and unreported/unrated
+counts. A week/rate change or invalid/decreasing counters leaves the delta
+unavailable. It does not invent a price table, treat credits as dollars, or
+claim to detect the $20 crossing: dollar comparison is explicitly unavailable
+until the existing API supplies a dollar-valued contract. An unavailable usage
+read warns without changing the scenario's outcome. No extra account, profile,
+credential, child-stream or billing-service lookup is made.
+
 ## Inspect deployed evidence
 
 A conversation started in the UI can be attached without sending a message:

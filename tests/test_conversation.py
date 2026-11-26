@@ -81,6 +81,20 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
+    async def usage(*args):
+        return {
+            "status": "available", "read_at": STAMP,
+            "week": {"starts_at": STAMP, "resets_at": "2026-11-02T00:00:00Z"},
+            "meters": [
+                {"meter": name, "used": 0, "state": "ok"}
+                for name in ("assistant", "study_ai")
+            ],
+            "measurement": {"unreported": 0, "unrated": 0},
+            "pricing": {"rate_version": "test-only", "provisional": False},
+        }
+
+    monkeypatch.setattr(app, "read_usage", usage)
+
 
 @pytest.fixture
 def fake_health(monkeypatch):
@@ -111,6 +125,89 @@ async def ask(c, key="first", message="Compare cash generation"):
         scenario="financial-quality",
         bearer="Bearer test-only",
     )
+
+
+def test_usage_baseline_survives_followups_and_status_without_new_agent_runs(tmp_path, fake_health, monkeypatch):
+    from tools.usage import summary
+
+    server, calls = Server(), []
+
+    async def read_usage(url, bearer):
+        calls.append((url, bearer))
+        return {
+            "status": "available", "read_at": str(len(calls)),
+            "week": {"starts_at": STAMP, "resets_at": "2026-11-02T00:00:00Z"},
+            "meters": [{"meter": name, "used": len(calls), "state": "reached"}
+                       for name in ("assistant", "study_ai")],
+            "measurement": {"unreported": 0, "unrated": 0},
+            "pricing": {"rate_version": "test", "provisional": False},
+        }
+
+    monkeypatch.setattr(app, "read_usage", read_usage)
+    first = exercise(tmp_path, server, ask)
+    initial = json.loads((tmp_path / "usage.json").read_text())
+    assert initial["budget_usd"] == 20
+    assert initial["baseline"]["read_at"] == "1"
+    assert exercise(tmp_path, server, ask) == first  # reconnect does not read/reset usage
+    exercise(tmp_path, server, lambda c: ask(c, "second"))
+    status = exercise(tmp_path, server, lambda c: c.status(bearer="Bearer test-only"))
+    assert status["usage"]["baseline"] == initial["baseline"]
+    assert status["usage"]["delta"] == {"assistant": 2, "study_ai": 2}
+    assert len(server.runs) == 2 and len(calls) == 3
+    assert calls == [(CONFIG.backend_url, "Bearer test-only")] * 3
+    assert all(not path.endswith("/cancel") for path, _ in server.posts)
+    assert len(list((tmp_path / "usage/reads").glob("*.json"))) == 3
+    report = __import__("tools.evidence", fromlist=["render_report"]).render_report(tmp_path)
+    assert "## Account usage" in report and "USD comparison: unavailable" in report
+    assert summary(initial["baseline"], status["usage"]["latest"], 20)["cost_usd"] is None
+
+
+def test_failed_initial_usage_read_does_not_block_run_or_replace_baseline(tmp_path, fake_health, monkeypatch):
+    server = Server()
+
+    async def missing(*args):
+        return {"status": "unavailable", "error_type": "HTTPStatusError"}
+
+    monkeypatch.setattr(app, "read_usage", missing)
+    exercise(tmp_path, server, ask)
+    first = json.loads((tmp_path / "usage.json").read_text())
+    assert first["baseline"]["status"] == "unavailable"
+
+    async def available(*args):
+        return {"status": "available", "meters": [], "read_at": "later"}
+
+    monkeypatch.setattr(app, "read_usage", available)
+    exercise(tmp_path, server, lambda c: ask(c, "second"))
+    last = json.loads((tmp_path / "usage.json").read_text())
+    assert last["baseline"] == first["baseline"] and last["delta"] is None
+    assert len(server.runs) == 2
+
+
+def test_attached_thread_has_no_invented_usage_baseline(tmp_path, fake_health):
+    server = Server()
+    exercise(tmp_path, server, lambda c: c.attach("owned-thread", owner="review", scenario=None))
+    status = exercise(tmp_path, server, lambda c: c.status(bearer="Bearer test-only"))
+    assert status["usage"]["baseline"] is None
+    assert status["usage"]["delta"] is None and not server.runs
+
+
+def test_explicit_budget_is_retained_and_legacy_attempt_never_gets_late_baseline(tmp_path, fake_health):
+    server = Server()
+
+    async def first(c):
+        return await c.submit(
+            "first", message="Compare cash generation", responses=None,
+            owner="analyst", scenario="financial-quality", bearer="Bearer test-only", budget_usd=25,
+        )
+
+    exercise(tmp_path, server, first)
+    baseline = json.loads((tmp_path / "usage.json").read_text())["baseline"]
+    exercise(tmp_path, server, lambda c: ask(c, "followup"))
+    record = json.loads((tmp_path / "usage.json").read_text())
+    assert record["budget_usd"] == 25 and record["baseline"] == baseline
+    (tmp_path / "usage.json").unlink()  # A retained attempt made by the old runner.
+    exercise(tmp_path, server, lambda c: ask(c, "legacy-followup"))
+    assert json.loads((tmp_path / "usage.json").read_text())["baseline"] is None
 
 
 class AuthRunServer(Server):

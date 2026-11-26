@@ -25,10 +25,10 @@ def snapshot_collection(folder: Path) -> Path:
         for name in (
             "attempt.json", "attachment.json", "thread.json", "status.json",
             "runs.json", "conversation.md", "sources.json", "metrics.json",
-            "report.md", "traces/langsmith.json",
+            "report.md", "traces/langsmith.json", "usage.json",
         )
     ]
-    for pattern in ("turns/*/*.json", "run-captures/*.json", "streams/*/*"):
+    for pattern in ("turns/*/*.json", "run-captures/*.json", "streams/*/*", "usage/reads/*.json"):
         paths.extend(folder.glob(pattern))
     files = {}
     for path in sorted(set(paths)):
