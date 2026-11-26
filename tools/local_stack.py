@@ -1139,6 +1139,17 @@ def stop(children: list, grace: float = 10) -> None:
         child.wait()
 
 
+def opaque_stdin_token() -> str:
+    """Read one caller-supplied credential without claims or login-cache access."""
+    value = sys.stdin.read(65537)
+    if not isinstance(value, str) or len(value) > 65536:
+        raise ValueError("Provide one bounded opaque ID token on stdin.")
+    token = value.rstrip("\r\n")
+    if not token or any(character.isspace() for character in token):
+        raise ValueError("Provide one nonempty opaque ID token on stdin.")
+    return token
+
+
 def main() -> None:
     def terminate(signum, frame):
         raise KeyboardInterrupt
@@ -1148,6 +1159,10 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("local-stack.toml"))
     parser.add_argument("--environments", type=Path, default=Path("environments.toml"))
     parser.add_argument("--email")
+    parser.add_argument(
+        "--id-token-stdin", action="store_true",
+        help="Use an opaque ID token from stdin for readiness only; do not read or replace a login cache.",
+    )
     parser.add_argument("--refresh-ui", action="store_true", help="Ask a capable running launcher to refresh only Portal.")
     parser.add_argument("--ui-commit", help="Exact qualified Portal commit for --refresh-ui.")
     parser.add_argument("--ui-configuration", help="Exact Portal build configuration SHA256 for --refresh-ui.")
@@ -1172,6 +1187,14 @@ def main() -> None:
         "or the `vite` dev server with hot reload",
     )
     args = parser.parse_args()
+    opaque_token = ""
+    if args.id_token_stdin:
+        if args.login or args.email or args.refresh_ui:
+            parser.error("--id-token-stdin cannot be combined with --login, --email or --refresh-ui.")
+        try:
+            opaque_token = opaque_stdin_token()
+        except ValueError as error:
+            parser.error(str(error))
     children = []
     portal = None
     up_started = False
@@ -1213,7 +1236,7 @@ def main() -> None:
             check_ports(service_ports(stack))
             services = prepare(args.config, stack, state, args.ai_runtime, args.ui_runtime,
                                **({"retained_cut": retained} if retained else {}))
-            bearer = (
+            bearer = opaque_token if args.id_token_stdin else (
                 login(args.email)
                 if args.login or not token_path().exists()
                 else cached_token(email=args.email)
@@ -1264,8 +1287,13 @@ def main() -> None:
                 ui_child = children[ui_index]
                 non_ui.remove(ui_child)
                 portal = ui_refresh_controller(state, stack, services[ui_index], ui_child, children)
+            auth_note = (
+                "Readiness used the supplied opaque token; no login cache was accessed."
+                if args.id_token_stdin
+                else "Local CLI login is cached. Browser login uses the same account."
+            )
             print(
-                f"Ready: {stack.ui_url}\nLocal CLI login is cached. Browser login uses the same account.\n"
+                f"Ready: {stack.ui_url}\n{auth_note}\n"
                 "Ctrl+C stops these services. No research has been started.",
                 flush=True,
             )
