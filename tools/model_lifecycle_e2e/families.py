@@ -20,7 +20,7 @@ def synthetic_value(index: int) -> float:
 
 
 def family_source(family: Family, *, model_ref: str, producer_execution: str | None = None,
-    manifest_sha256: str | None = None, fit: bool = False, save_as: str | None = None,
+    manifest_sha256: str | None = None, fit: bool = False,
     changed_observed_suffix: bool = False) -> str:
     if family not in ('HMM', 'ARIMA', 'GARCH'):
         raise ValueError('Choose an actually implemented artifact family')
@@ -30,8 +30,6 @@ def family_source(family: Family, *, model_ref: str, producer_execution: str | N
         raise ValueError('Fit once, or choose exactly one execution/resource origin')
     if manifest_sha256 is not None and not re.fullmatch('[a-f0-9]{64}', manifest_sha256):
         raise ValueError('An exact saved manifest pin is required')
-    if save_as is not None and (not fit or not save_as or len(save_as.encode()) > 255 or any(ord(c) < 32 for c in save_as)):
-        raise ValueError('An authored Save name belongs only to a fit producer')
     if changed_observed_suffix and (family != 'HMM' or fit):
         raise ValueError('The causal suffix control consumes one existing HMM fit only')
     first = date(2022, 1, 1)
@@ -56,8 +54,7 @@ observed = clip_window(window=SourceWindow(start="2022-06-10", end="2022-07-19")
         f',model_manifest_sha256={json.dumps(manifest_sha256)}' if manifest_sha256 else ''
     inputs = '(train,)' if family == 'HMM' else 'train'
     if fit:
-        save = f',save_as={json.dumps(save_as)}' if save_as is not None else ''
-        source += f'fit = {family.lower()}_fit(model_ref={json.dumps(model_ref)},{options},random_state=42{save})({inputs})\n'
+        source += f'fit = {family.lower()}_fit(model_ref={json.dumps(model_ref)},{options},random_state=42)({inputs})\n'
     observed_input = '(observed,)' if family == 'HMM' else 'observed'
     source += f'inference = {family.lower()}_infer(model_ref={json.dumps(model_ref)},{options}{origin})({observed_input})\n'
     fields = {

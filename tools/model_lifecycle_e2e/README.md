@@ -134,8 +134,10 @@ oracle, exact continuation, explicit Save and concurrent equal retries. Then sto
 Native and restart Platform for `offline`; detach only the owned fixture's source
 resources with retained backups while Native is stopped; restart Native before
 `consume --remove-native-sources`. The launch receipts must prove changed service
-PIDs. `authored` separately checks that only the fit with explicit `save_as` is
-saved. These drivers are prepared; a generated script is not a passing live run.
+PIDs. `save-selected` completes two fits, checks that neither was automatically
+saved, then explicitly saves one through the ordinary Save API. ENG-3235 retires
+`save_as` and the authored completion endpoint. These drivers are prepared; a
+generated script is not a passing live run.
 The intermediate Backend-owned `http_owned` Save entry point is retired; its
 execution and Arrow helpers remain shared.
 
@@ -269,10 +271,13 @@ Save request identities are written before submission; stop on unknown outcomes.
   score. `--remove-native-sources` requires the prior explicit detach receipt; it never
   renames sources beneath a running Native server or infers a cold start. Record
   the actual changed Native PID after detaching and restarting.
-- `authored`: a separate producer with two temporary fits and only one explicit
-  `save_as`; repeated Platform completion saves only that chosen fit. This checks
-  the real completion endpoint, not cloud acceptance-worker recovery, which needs
-  its separate cloud scenario.
+- `save-selected`: a separate producer with two temporary fits. Two first Save
+  requests select the same fit with different request IDs/names concurrently;
+  both must return one saved model. A later fresh-ID/name Save returns the same
+  identity and original name. The unselected fit stays temporary. The explicit
+  `--save-second-fit` variant then saves the other fit and requires two distinct
+  saved identities. Save creates no numerical execution. This private API
+  scenario does not establish cloud, browser or agent acceptance.
 
 `family_http.py` runs each actually implemented immutable-artifact family (HMM,
 ARIMA, GARCH) separately. `families.py` supplies a deterministic owned 200-row

@@ -27,6 +27,7 @@ from .http_owned import execute, table_answers, write
 from .native_artifact import assert_fixture_state, read_owned_ols
 from .oracle import expected
 from .source import fixture_source
+from .explicit_save import save_with_changed_ids_and_names
 from .opaque_auth import TokenProvider, admit_primary, caller
 
 
@@ -172,37 +173,76 @@ def produce(args, token_provider: TokenProvider | None = None) -> None:
             'concurrent_equal_saves': len(repeats), 'save_numerical_executions': 0})
 
 
-def authored(args, token_provider: TokenProvider | None = None) -> None:
-    """Only the authored fit is saved; unselected temporary fits remain temporary."""
+def save_selected(args, token_provider: TokenProvider | None = None) -> None:
+    """Complete two fits, then explicitly save the selected one (ENG-3235).
+
+    Two first saves race with different request IDs/names. A ready retry changes
+    both again. Saving the second fit is a separately selected scenario variant.
+    """
     args.evidence.mkdir(mode=0o700)
     token, owner = caller(args.expected_owner, token_provider)
     native_url, platform_url = loopback(args.native_url), loopback(args.platform_url)
-    source = fixture_source(args.fixture, stage='fit', save_as='Owned authored OLS')
-    anchor = 'score_x = '
-    at = source.index(anchor)
+    source = fixture_source(args.fixture, stage='fit')
+    at = source.index('score_x = ')
     source = source[:at] + 'unselected = ols_fit(model_ref="unselected_owned")(train_x, target=train_y, training_source_coordinate=index_of(train_y))\n' + source[at:]
+    opts = {'max_retries': 0}
     with httpx.Client(timeout=120, trust_env=False) as native_http, httpx.Client(timeout=90, trust_env=False) as model_http:
         native = StratifyX(base_url=native_url, token=token, httpx_client=native_http, follow_redirects=False)
         models = EpochModels(base_url=platform_url, token=token, httpx_client=model_http, follow_redirects=False)
-        _, producer = execute(native, source, 'Owned explicit authored Save', args.evidence / 'fit', args.dispatch)
+        initial = models.list_models(request_options=opts)
+        assert not initial.items and not initial.next_cursor, 'Choose a fresh private model store'
+        _, producer = execute(native, source, 'Owned explicit selected-fit Save', args.evidence / 'fit', args.dispatch)
         table_answers(native, producer, args.evidence / 'fit', expected(args.fixture)['holdout'])
         effects(args.native_root, owner, producer, 2, args.evidence / 'fit-effects.json')
-        request = {'execution_id': producer, 'source_location': 'server'}
-        write(args.evidence / 'completion-intent.json', request)
+        assert models.list_models(request_options=opts) == initial, 'Completed fitting alone saved a model'
+        reply = native_http.get(f'{native_url}/api/v1/studies/executions/{producer}/model-fit-output',
+            headers={'Authorization': f'Bearer {token}'})
+        reply.raise_for_status()
+        envelope = reply.json()
+        descriptor_bytes = base64.b64decode(envelope['descriptor_base64'], validate=True)
+        assert hashlib.sha256(descriptor_bytes).hexdigest() == envelope['descriptor_sha256']
+        descriptor = json.loads(descriptor_bytes)
+        assert descriptor['owner_user_id'] == owner and descriptor['execution_id'] == producer
+        assert descriptor['storage_location'] == 'server' and descriptor['producer']['study']['source'] == source
+        fits = {fit['fit_name']: fit for fit in descriptor['fits']}
+        assert len(descriptor['fits']) == len(fits) == 2 and set(fits) == {'owned_fixture', 'unselected_owned'}
+        assert all('save_as' not in fit for fit in fits.values())
+        (args.evidence / 'producer-model-fits.json').write_bytes(descriptor_bytes)
+        request = {'execution_id': producer, 'fit_name': 'owned_fixture',
+            'expected_digest': fits['owned_fixture']['artifact']['binding']['digest'], 'source_location': 'server'}
+        write(args.evidence / 'selected-fit-save.json', request)
         before = sorted(path.name for path in (args.native_root / 'research_studies' / owner).iterdir())
-        page = models.complete_model_saves(**request, request_options={'max_retries': 0})
-        repeated = models.complete_model_saves(**request, request_options={'max_retries': 0})
-        assert page == repeated and len(page.items) == 1 and not page.next_cursor
-        saved = page.items[0]
-        assert saved.name == 'Owned authored OLS' and saved.producer_fit_name == 'owned_fixture'
-        detail = models.read_model(saved.model_ref, request_options={'max_retries': 0})
+
+        def save_exact(request_id, name):
+            body = request | {'request_id': request_id, 'name': name}
+            write(args.evidence / f'save-{request_id}-intent.json', body)
+            return models.save_model(**body, request_options=opts)
+
+        saved = save_with_changed_ids_and_names(save_exact, args.evidence)
+        assert saved.digest == request['expected_digest'] and saved.producer_fit_name == 'owned_fixture'
+        page = models.list_models(request_options=opts)
+        assert not page.next_cursor and page.items == [saved], 'Unselected fit was saved or selected fit duplicated'
+        detail = models.read_model(saved.model_ref, request_options=opts)
         assert detail.producer['study']['source'] == source
+        second = None
+        if args.save_second_fit:
+            second_request = {'request_id': str(uuid4()), 'name': 'Second explicitly selected OLS',
+                'execution_id': producer, 'fit_name': 'unselected_owned', 'source_location': 'server',
+                'expected_digest': fits['unselected_owned']['artifact']['binding']['digest']}
+            write(args.evidence / 'second-fit-save-intent.json', second_request)
+            second = models.save_model(**second_request, request_options=opts)
+            assert second.model_ref != saved.model_ref and second.producer_fit_name == 'unselected_owned'
+            assert second.digest == second_request['expected_digest']
+            page = models.list_models(request_options=opts)
+            assert not page.next_cursor and {item.model_ref for item in page.items} == {saved.model_ref, second.model_ref}
         after = sorted(path.name for path in (args.native_root / 'research_studies' / owner).iterdir())
-        assert before == after
-        write(args.evidence / 'authored-receipt.json', {'status': 'passed', 'owner': owner, 'producer': producer,
-            'fit_count': 2, 'saved_count': 1, 'completion_numerical_executions': 0,
+        assert before == after, 'Save created a numerical execution'
+        write(args.evidence / 'selected-save-receipt.json', {'status': 'passed', 'owner': owner, 'producer': producer,
+            'fit_count': 2, 'saved_count': 2 if second else 1, 'save_numerical_executions': 0,
             'model_ref': saved.model_ref, 'digest': saved.digest, 'manifest_sha256': saved.manifest_sha256,
-            'unselected_fit': 'unselected_owned', 'scope': 'actual explicit completion API and repeated receipt; private local direct execution does not establish cloud acceptance-worker recovery'})
+            'concurrent_first_saves': 2, 'different_request_ids_and_names': True, 'ready_retry_keeps_original_name': True,
+            'second_model_ref': second.model_ref if second else None,
+            'scope': 'actual private selected-fit Save API; no authored completion, cloud, agent or browser acceptance'})
 
 
 def offline(args, token_provider: TokenProvider | None = None) -> None:
@@ -281,7 +321,7 @@ def consume(args, token_provider: TokenProvider | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase', choices=['produce', 'authored', 'offline', 'detach', 'consume'])
+    parser.add_argument('phase', choices=['produce', 'save-selected', 'offline', 'detach', 'consume'])
     parser.add_argument('--native-url', required=True)
     parser.add_argument('--platform-url', required=True)
     parser.add_argument('--native-root', type=Path, required=True)
@@ -292,6 +332,8 @@ def main() -> None:
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--dispatch', choices=['inprocess', 'subprocess'], default='inprocess')
     parser.add_argument('--remove-native-sources', action='store_true')
+    parser.add_argument('--save-second-fit', action='store_true',
+        help='For save-selected only, explicitly save the other fit after proving it stayed temporary')
     parser.add_argument('--drop-first-save-response', action='store_true',
         help='Inject a client transport failure after an actual successful Save response, then reconcile the same intent')
     args = parser.parse_args()
@@ -299,7 +341,9 @@ def main() -> None:
         raise ValueError('Use exact absolute private fixture/evidence paths')
     admit_primary(args.root_readiness, args.root_readiness_sha256, native_url=args.native_url,
         platform_url=args.platform_url, native_root=args.native_root, expected_owner=args.expected_owner)
-    {'produce': produce, 'authored': authored, 'offline': offline, 'detach': detach, 'consume': consume}[args.phase](args)
+    if args.save_second_fit and args.phase != 'save-selected':
+        raise ValueError('--save-second-fit belongs only to the explicit selected-fit scenario')
+    {'produce': produce, 'save-selected': save_selected, 'offline': offline, 'detach': detach, 'consume': consume}[args.phase](args)
 
 
 if __name__ == '__main__': main()
