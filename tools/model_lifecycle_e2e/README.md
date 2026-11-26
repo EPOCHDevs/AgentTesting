@@ -416,6 +416,10 @@ reach EpochPlatform through that API host; `services.dev.epoch.trade` exposes
 internal service routes and does not serve public Models. No alternate hosts,
 ports, paths, redirects, localhost/cloud mixtures or server-export bridge.
 This is an engineering harness, not a new product surface or a campaign verdict.
+The transport accepts the registered success status for each admitted route:
+201 for Native definition creation and execution submission; 200 for compile,
+Arrow table reads and admitted GETs. Other statuses stop the spent attempt,
+including unexpected 2xx responses; a successful create is not automatically retried.
 
 Root supplies the existing consumer admission fields plus:
 
