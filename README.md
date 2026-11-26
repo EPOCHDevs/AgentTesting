@@ -118,6 +118,14 @@ to Platform, not Backend.
 .venv/bin/python -m tools.local_stack
 ```
 
+For an operator using an existing opaque-token provider, add `--id-token-stdin`
+and supply its ID token through a private pipe. This mode reads no login cache,
+does not parse token claims, and never falls back to interactive login. Empty,
+whitespace-containing or oversized input stops before preparing services.
+The token is used only for readiness requests; it is not written to launcher
+artifacts or passed to a server. Do not combine it with `--login`, `--email`
+or `--refresh-ui`.
+
 The agent server runs under `langgraph dev` on port 2024 by default (`local`
 profile). That server shares one Python process, so concurrent runs wait on each
 other. For parallel runs, start the licensed server instead:
