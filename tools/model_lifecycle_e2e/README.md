@@ -406,3 +406,113 @@ Save response and withholds it only from its fixture client. It first reconciles
 that observed identity with an ordinary read before any known equal retry.
 Genuinely unknown real outcomes stop all writes. This is not a shared proxy,
 host failure injection, worker-recovery test or automatic request retry loop.
+
+## Explicit DEV-cloud family consumers
+
+`family_consumers` keeps its loopback default. DEV requires both `--mode dev-cloud`
+and a hash-pinned root admission with `mode: "dev-cloud"`. Origins must be exactly
+`https://api.dev.epoch.trade` and `https://services.dev.epoch.trade`: no alternate
+hosts, ports, paths, redirects, localhost/cloud mixtures or server-export bridge.
+This is an engineering harness, not a new product surface or a campaign verdict.
+
+Root supplies the existing consumer admission fields plus:
+
+- A `ROOT_ADMITTED_DEV_MODEL_LIFECYCLE_RUNTIME_V1` packet, `ready: true`, matching
+  native/platform origins, full source commits, expected owner, `native_root: null`,
+  and `runtime_receipts.native` / `.platform` ordinary-file references with hashes.
+- `platform_source`, a canonical UUID `case_id`, `producer_definition_id` and
+  `consumer_execution_ids`, and one `consumer_source_sha256` per reserved execution.
+  Producer/owner/config/source/digest/cutoff joins remain mandatory. The generation
+  witness must additionally be root-admitted and Completed, pin the producer
+  definition/config and match the actual shared generation. No relabelled local fit.
+- `acceptance_plan` referencing the existing v6 bytes, SHA-256
+  `c99882765cc724c111809ad6cfa7cff109fc1da7d55d90986b17729db7068d28`,
+  `harness_sources` exactly from `family_cloud.source_hashes()`, and `request_plan`
+  exactly from `family_cloud.stage_plan(family, stage)`. Reference shape is
+  `{"path": "/absolute/ordinary/file", "sha256": "<64 lowercase hex>"}`.
+- Existing selected artifact bytes and the unchanged maintained opaque credential
+  provider. No token decoding, cache/profile inspection or credential fallback.
+  Saved HMM stages also require the original temporary pair's finalized receipt,
+  base answers and actual config, as in the loopback mode.
+
+None of these are auto-generated live admissions. Root assigns and reviews actual
+identities, complete bodies, runtime/readiness evidence and effect bounds first.
+`--plan` checks references/source joins and prints caps without credentials or
+requests. `--execute` alone activates the pinned stage and creates an exclusive
+`.spent` fence beside its admission before credentials or requests. Keep that
+fence and every interrupted/failed attempt; changing the output directory must
+not resubmit an admission. Unknown outcomes stop writes, with no automatic retry.
+
+| Consumer stage | Executions | Compile / definition / execute POSTs | Arrow read POSTs | GET maximum |
+| --- | ---: | --- | ---: | ---: |
+| HMM temporary base + changed suffix | 2 | 2 / 2 / 2 | 6 | 175 |
+| HMM saved or post-cleanup | 1 | 1 / 1 / 1 | 3 | 90 |
+| ARIMA/GARCH temporary, saved or post-cleanup checkpoint | 1 | 1 / 1 / 1 | 1 | 90 |
+
+Per invocation GETs comprise health 1, inventory before/after 2, exact selection
+before/after 2; per execution, at most 60 terminal polls, 20 log pages of 100,
+and one each of as-run study, historical lifecycle, empty-fit roster, outputs
+and bound response. These are ceilings, not read quotas. Every actual request
+is retained before forwarding; raw bounded replies are retained before parsing.
+Only exact generated source/write bodies and actual bound table/page reads can
+be POSTed. Normal API errors stop the attempt, including redirects. There are
+zero Save, export, S3, provider/vendor, restart and cleanup calls.
+
+The cloud mode checks completed job/definition identity, the exact as-run source,
+all canonical log pages, a unique completed historical terminal, empty fit
+roster, accepted response/version/request identity, complete Arrow rows and the
+existing numerical oracles. HMM still uses two temporary consumers and one saved
+replay; ARIMA/GARCH still use four empty-input scalar horizons 1/2/5/21 from the
+same checkpoint, with no authored application period.
+
+**Sealed contracts are a separate mandatory gate.** Public compile nodes and the
+as-run study projection do not expose the actual sealed node contracts. A cloud
+execution therefore writes `pending-receipt.json` with
+`PENDING_ACTUAL_SEALED_CONFIG_CAPTURE`, never a passing `receipt.json`. It neither
+uses a local Backend path nor automatically exports a tree/downloads S3 bytes.
+Root must first qualify a supported capture's exact fixture, membership/size/path
+bounds and secret/grant handling. The owner-authenticated full-tree export route
+is a source lead for root's review, not an automatic capture fallback here.
+
+Offline `--finalize /absolute/capture.json --finalize-sha256 HASH` requires a
+hash-pinned `ROOT_ADMITTED_DEV_MODEL_LIFECYCLE_CONFIG_CAPTURE_V1` with `ready: true`,
+the original admission/runtime-packet hashes and case ID, the exact pending
+receipt reference and ordered `consumers`. Each consumer pins an actual config
+reference and a separate root-admitted `capture_read_receipt`, joining owner,
+execution, actual definition, Completed status, nonempty generation, config SHA
+and source SHA. The same `retained_contract` checker then proves the sealed
+owner/digest/origin/capability/horizon/causal stamps and zero fit-capable nodes.
+Finalization writes a new `receipt.json`; the pending evidence remains unchanged.
+It makes no credentials, network or numerical calls. Failed/missing captures
+remain pending. HMM saved replay requires this finalized temporary evidence.
+
+Cloud post-cleanup admission additionally requires actual witnessed removal of
+both the source execution and temporary artifact, plus a hash-pinned supported
+operation receipt. A generation 404 or `sources: null` is insufficient. There is
+currently no qualified case-scoped artifact-removal operator; this remains a
+genuine pending gate. The harness adds no owner-wide GC or manual S3 workaround.
+Real cross-owner testing still requires a second ordinary root-supplied identity;
+these positive owned consumers do not certify it.
+
+### Remaining producer and family stage plans
+
+`family_cloud.producer_request_plan(family, ROOT_RESERVED_EXECUTION_UUID,
+ROOT_SELECTED_FIT_NAME)` is source-only: it emits `SOURCE_PLAN_NOT_ADMITTED`,
+the exact source hash and three proposed write bodies (compile, create definition,
+execute), with the actual returned definition ID substituted only after creation.
+It cannot invoke a producer. Its 89-GET ceiling comprises health 1, inventory 2,
+terminal polls 60, log pages 20, historical lifecycle 1, fit roster 1, exact fit 1,
+outputs 1, bound response 1 and as-run study 1. Forty observed rows require three
+Arrow read POSTs at page size 17. Actual descriptor/artifact/checkpoint capture,
+Save/race checks and every live stage require separate root admission.
+
+Keep the same 200 synthetic rows, first 160 training / next 40 observed, seed 42,
+HMM two states, ARIMA(0,1,0) with constant and GARCH(1,1) normal. Per v6, HMM is
+one producer plus four zero-fit consumers (temporary base/suffix, saved,
+post-cleanup). ARIMA/GARCH each allow one producer plus four zero-fit consumers:
+observed continuation, temporary checkpoint horizons, saved horizons, post-cleanup
+horizons. The separate observed ARIMA/GARCH cloud continuation is still a planned
+stage; this mode runs checkpoint consumers, not an extra observed execution.
+Do not reuse the all-in-one local `family_http.journey` against DEV or add an
+unplanned producer to obtain a convenient fit. API controls/preparation are not
+future-output, product-chat, SPY or whole-family acceptance.
