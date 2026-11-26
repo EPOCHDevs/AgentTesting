@@ -1145,7 +1145,7 @@ def opaque_stdin_token() -> str:
     if not isinstance(value, str) or len(value) > 65536:
         raise ValueError("Provide one bounded opaque ID token on stdin.")
     token = value.rstrip("\r\n")
-    if not token or any(character.isspace() for character in token):
+    if not token or any(not 0x21 <= ord(character) <= 0x7E for character in token):
         raise ValueError("Provide one nonempty opaque ID token on stdin.")
     return token
 

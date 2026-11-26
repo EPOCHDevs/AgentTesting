@@ -46,7 +46,12 @@ def test_opaque_stdin_token_keeps_the_unparsed_value(monkeypatch, value):
     assert local_stack.opaque_stdin_token() == "opaque-fixture"
 
 
-@pytest.mark.parametrize("value", ["", "\n", " ", "opaque fixture", "opaque\nfixture", "x" * 65537])
+@pytest.mark.parametrize("value", [
+    "", "\n", " ", "opaque fixture", "opaque\nfixture", "x" * 65537,
+    "sensitive-sentinel\x00value", "sensitive-sentinel\x01value",
+    "sensitive-sentinel\x1fvalue", "sensitive-sentinel\x7fvalue",
+    "sensitive-sentinelévalue", "sensitive-sentinel\u2028value",
+])
 def test_invalid_stdin_stops_before_preparation_or_auth_fallback(monkeypatch, value, capsys):
     def forbidden(*args, **kwargs):
         raise AssertionError("Invalid stdin must stop before preparation or login")
@@ -61,6 +66,7 @@ def test_invalid_stdin_stops_before_preparation_or_auth_fallback(monkeypatch, va
     captured = capsys.readouterr()
     assert "opaque fixture" not in captured.err
     assert "x" * 100 not in captured.err
+    assert "sensitive-sentinel" not in captured.err
     assert not captured.out
 
 
