@@ -26,6 +26,8 @@ PLATFORM_PATHS = (
     "/api/v1/space*",
     "/api/v1/models",
     "/api/v1/models/*",
+    # PLATFORM_EARLY_PRESENTATION_PATHS; other execution context reads stay Native.
+    "/api/v1/contexts/executions/*/presentation/delivery",
     "/internal/document-*",
     "/internal/dataset-preparations/*",
     "/internal/web-research/*",
