@@ -94,7 +94,8 @@ class CloudTest(unittest.TestCase):
                            ('native_url', cloud.NATIVE + '/'), ('native_url', cloud.NATIVE + ':443'),
                            ('native_url', 'https://api.dev.epoch.trade.evil.invalid'),
                            ('native_url', 'https://user@api.dev.epoch.trade'),
-                           ('platform_url', cloud.NATIVE), ('platform_url', 'https://services.epoch.trade')]:
+                           ('platform_url', 'https://services.dev.epoch.trade'),
+                           ('platform_url', 'https://services.epoch.trade')]:
             value, runtime = copy.deepcopy(self.value), copy.deepcopy(self.runtime)
             self.value[field] = self.runtime[field] = url
             with self.subTest(url=url), self.assertRaisesRegex(ValueError, 'canonical'):
@@ -103,6 +104,31 @@ class CloudTest(unittest.TestCase):
         self.value['native_root'] = self.runtime['native_root'] = str(self.root)
         with self.assertRaisesRegex(ValueError, 'masquerade'):
             self.load()
+
+    def test_saved_models_use_public_api_host_and_refuse_internal_service_host(self):
+        import httpx
+        self.value.update(stage='saved', saved_model_ref='model_' + 'a' * 64,
+                          manifest_sha256='f' * 64, request_plan=cloud.stage_plan('GARCH', 'saved'))
+        self.refresh_source()
+        case = self.load()
+        self.assertEqual(case.platform_url, 'https://api.dev.epoch.trade')
+        path = '/api/v1/models/' + case.model_ref
+        facts = {'model': {'model_ref': case.model_ref, 'digest': case.digest,
+            'manifest_sha256': case.manifest_sha256, 'producer_execution_id': case.producer,
+            'producer_fit_name': case.fit_name, 'producer_definition_id': DEFINITION,
+            'producer_config_sha256': case.config_sha256}, 'manifest': {'owner_user_id': case.owner}}
+        forwarded = []
+        def handler(request):
+            forwarded.append((request.method, str(request.url)))
+            self.assertEqual(forwarded[-1], ('GET', 'https://api.dev.epoch.trade' + path))
+            return http_reply(200, value=facts)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            wire = cloud.Wire(client, cloud.RouteGuard(case), self.root)
+            with self.assertRaisesRegex(ValueError, 'origin'):
+                wire.call('GET', path, origin='https://services.dev.epoch.trade')
+            self.assertEqual(forwarded, [])
+            self.assertEqual(cloud.selection(wire, case), facts)
+        self.assertEqual(forwarded, [('GET', 'https://api.dev.epoch.trade' + path)])
 
     def test_runtime_generation_source_and_slot_tampering_fail_closed(self):
         for field, value in [('platform_source', 'a' * 40), ('consumer_execution_ids', [PRODUCER]),

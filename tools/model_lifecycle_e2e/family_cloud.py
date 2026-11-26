@@ -17,7 +17,9 @@ from urllib.parse import quote, urlencode, urlsplit
 from uuid import UUID
 
 NATIVE = 'https://api.dev.epoch.trade'
-PLATFORM = 'https://services.dev.epoch.trade'
+# Public Models routes reach Platform through the API host. The service host
+# accepts internal service routes and does not expose /api/v1/models.
+PLATFORM = 'https://api.dev.epoch.trade'
 V6_SHA256 = 'c99882765cc724c111809ad6cfa7cff109fc1da7d55d90986b17729db7068d28'
 SOURCE_FILES = ('family_cloud.py', 'family_consumers.py', 'families.py',
                 'family_forecasts.py', 'forecast_oracle.py', 'native_artifact.py')
@@ -25,7 +27,7 @@ SOURCE_FILES = ('family_cloud.py', 'family_consumers.py', 'families.py',
 
 def canonical_origins(native: str, platform: str) -> tuple[str, str]:
     if native != NATIVE or platform != PLATFORM:
-        raise ValueError('DEV cloud mode requires the exact canonical api.dev/services.dev HTTPS origins')
+        raise ValueError('DEV cloud mode requires the canonical api.dev HTTPS origin for Native and public Models')
     return native, platform
 
 

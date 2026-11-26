@@ -410,9 +410,11 @@ host failure injection, worker-recovery test or automatic request retry loop.
 ## Explicit DEV-cloud family consumers
 
 `family_consumers` keeps its loopback default. DEV requires both `--mode dev-cloud`
-and a hash-pinned root admission with `mode: "dev-cloud"`. Origins must be exactly
-`https://api.dev.epoch.trade` and `https://services.dev.epoch.trade`: no alternate
-hosts, ports, paths, redirects, localhost/cloud mixtures or server-export bridge.
+and a hash-pinned root admission with `mode: "dev-cloud"`. Both `native_url` and
+`platform_url` must be exactly `https://api.dev.epoch.trade`. Public Models routes
+reach EpochPlatform through that API host; `services.dev.epoch.trade` exposes
+internal service routes and does not serve public Models. No alternate hosts,
+ports, paths, redirects, localhost/cloud mixtures or server-export bridge.
 This is an engineering harness, not a new product surface or a campaign verdict.
 
 Root supplies the existing consumer admission fields plus:
