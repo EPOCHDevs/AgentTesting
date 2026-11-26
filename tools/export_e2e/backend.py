@@ -23,6 +23,7 @@ import httpx
 import jwt
 
 from tools.agent_testing import Stack
+from tools.usage import snapshot as usage_snapshot
 
 from .catalog import (
     ALL,
@@ -130,18 +131,7 @@ class Backend:
 
     def usage(self) -> dict[str, object]:
         """The owner's weekly usage meters (read only), for a before/after cost record."""
-        value = self.get_json("/api/v1/platform/usage")
-        assert isinstance(value, dict)
-        return {
-            "read_at": now(),
-            "week": value.get("week"),
-            "meters": [
-                {k: meter.get(k) for k in ("meter", "used", "limit", "mode", "state", "blocked")}
-                for meter in value.get("meters") or []
-            ],
-            "breakdown": value.get("breakdown"),
-            "measurement": value.get("measurement"),
-        }
+        return usage_snapshot(self.get_json("/api/v1/platform/usage"))
 
     # --- creation ------------------------------------------------------------------
 

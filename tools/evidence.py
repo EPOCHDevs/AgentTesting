@@ -785,6 +785,18 @@ def render_report(folder: Path) -> str:
         lines.append(
             f"| {name} | {_cell(source.get('status'))} | {_link(folder, path, 'saved source')} |"
         )
+    usage_path = folder / "usage.json"
+    if usage_path.exists():
+        usage = json.loads(usage_path.read_text())
+        lines += [
+            "", "## Account usage", "",
+            str(usage["scope"]), "",
+            f"Scenario soft budget: ${usage['budget_usd']:g}; {usage['budget_mode']} only. USD comparison: {usage['budget_status']}.",
+            f"Account-window change (credits): {_cell(usage.get('delta'))}.",
+            f"Evidence: {_link(folder, 'usage.json', 'usage API readings')}.",
+            "",
+            *[f"- {warning}" for warning in usage.get("warnings", [])],
+        ]
     lines.extend(
         [
             "",
