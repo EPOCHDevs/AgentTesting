@@ -232,6 +232,22 @@ UP_CONFIG, UP_ENV, UP_COMPOSE = (
 )
 CONTAINER_PORT = 8000  # langgraph-api's port inside its container
 WORKER_TOKEN = "EPOCH_DOCUMENT_WORKER_TOKEN"
+STUDY_PEER_TOKEN = "EPOCH_RUN_STORE_TOKEN"
+
+
+def study_access(state: Path) -> dict[str, str]:
+    """One durable local peer credential, supplied only to Native and Platform."""
+    path = private_dir(state) / "study-peer-token"
+    if path.is_symlink():
+        raise ValueError("The local Study peer credential must be a private regular file")
+    if not path.is_file():
+        write_private(path, secrets.token_urlsafe(48))
+    if path.is_symlink() or path.stat().st_mode & 0o077:
+        raise ValueError("The local Study peer credential must be a private regular file")
+    value = path.read_text().strip()
+    if len(value) < 32 or any(ord(char) <= 0x20 or ord(char) >= 0x7f for char in value):
+        raise ValueError("The local Study peer credential is invalid")
+    return {STUDY_PEER_TOKEN: value}
 
 
 def source_access(
@@ -685,6 +701,8 @@ def prepare_platform(
     commit: str,
     state: Path,
     reference_root: Path,
+    *,
+    study_agent_origin: str | None = None,
 ) -> tuple:
     """Epoch Platform's general service, with Files and Space on local disk and no AWS account.
 
@@ -701,6 +719,10 @@ def prepare_platform(
         raise ValueError(f"The Platform build failed. Inspect {log}.")
     # No AWS credentials reach it: local Files must never fall back to a cloud store.
     env = {key: value for key, value in base.items() if not key.startswith("AWS_")}
+    for key in ("EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL",
+                "EPOCH_STUDY_NATIVE_ORIGIN", "EPOCH_STUDY_AGENT_ORIGIN",
+                "EPOCH_STUDY_NATIVE_PERSONAL_ROOT", STUDY_PEER_TOKEN):
+        env.pop(key, None)
     env.update({
         "AWS_CONFIG_FILE": os.devnull,
         "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
@@ -718,6 +740,14 @@ def prepare_platform(
         "EPOCH_REFERENCE_LOCAL_ROOT": str(reference_root),
         **files_access,
     })
+    if STUDY_PEER_TOKEN in files_access:
+        origin = urlsplit(study_agent_origin or "")
+        if (origin.scheme not in {"http", "https"} or origin.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or origin.username or origin.password or origin.path not in {"", "/"} or origin.query or origin.fragment):
+            raise ValueError("Local Study source resolution requires the configured loopback Agent origin")
+        env.update({"EPOCH_STUDY_NATIVE_ORIGIN": f"http://127.0.0.1:{BACKEND_PORT}",
+                    "EPOCH_STUDY_AGENT_ORIGIN": study_agent_origin or "",
+                    "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(project / "personal_content")})
     # GDS is a shared catalogue service in deployed stacks too. Read only its
     # explicit connection settings; local Files and observation reads stay local.
     settings = platform / ".env.local"
@@ -953,6 +983,13 @@ def prepare(
     if retained_cut is None:
         revisions["EpochAI"]["commentary_deployment_revision"] = revision
     files_access, ai_values = source_access(state, stack.backend_url, backend_values, ai_values)
+    study_peer = study_access(state)
+    backend_env.update(study_peer)
+    backend_env.pop("EPOCH_RUN_STORE_URL", None)
+    files_access.update(study_peer)
+    # Copy authority belongs to Native/Platform, never the Agent or its image.
+    ai_values.pop(STUDY_PEER_TOKEN, None)
+    ai_values.pop("EPOCH_RUN_STORE_URL", None)
     ai_values = {**ai_values, **document_access(config.get("documents", {}))}
     check_document_access(ai_values, base)
     print(
@@ -970,6 +1007,7 @@ def prepare(
     platform_service = prepare_platform(
         platform, node, base, backend_values, files_access,
         Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state, reference_root,
+        study_agent_origin=stack.ai_url,
     )
     print(
         "Files and Space: Epoch Platform, on local disk in "
@@ -981,6 +1019,8 @@ def prepare(
     # The agent publishes `epoch login`'s client in its protected resource metadata.
     sign_in = {"EPOCH_SIGN_IN_CLIENT_ID": CLI_CLIENT}
     ai_env = {**base, **ai_values, **common, **sign_in}
+    ai_env.pop(STUDY_PEER_TOKEN, None)
+    ai_env.pop("EPOCH_RUN_STORE_URL", None)
     graph_config["env"] = {**ai_values, **common, **sign_in}
     graph_config["dependencies"] = [
         str(ai / dep) if dep.startswith(".") else dep
@@ -1018,7 +1058,7 @@ def prepare(
             ports[1],
             runtime_ai_source,
             state,
-            base,
+            {key: value for key, value in base.items() if key not in {STUDY_PEER_TOKEN, "EPOCH_RUN_STORE_URL"}},
             **({"retained_image_id": retained_cut.ai_image_id} if retained_cut else {}),
         )
         if ai_runtime == "up"
@@ -1088,7 +1128,8 @@ def prepare(
 
 
 def portal_environment(base: dict[str, str], stack: Stack) -> dict[str, str]:
-    return {**base, "VITE_API_BASE_URL": stack.backend_url,
+    public = {key: value for key, value in base.items() if key not in {STUDY_PEER_TOKEN, "EPOCH_RUN_STORE_URL"}}
+    return {**public, "VITE_API_BASE_URL": stack.backend_url,
             "VITE_LANGGRAPH_API_URL": stack.ai_url, "VITE_LANGGRAPH_ASSISTANT_ID": stack.assistant_id,
             "VITE_COGNITO_USER_POOL_ID": POOL, "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT}
 

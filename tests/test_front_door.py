@@ -19,6 +19,14 @@ from tools import front_door
         ("/api/v1/models/model_" + "a" * 64, True),
         ("/api/v1/models-unrelated", False),
         ("/api/v1/studies/executions/run/model-fits", False),
+        ("/api/v1/contexts/executions/run-one/presentation/delivery", True),
+        ("http://localhost:9000/api/v1/contexts/executions/run-two/presentation/delivery?wait=1", True),
+        ("/api/v1/contexts/executions/run-one", False),
+        ("/api/v1/contexts/executions/run-one/presentation", False),
+        ("/api/v1/contexts/executions/run-one/presentation/delivery/extra", False),
+        ("/api/v1/contexts/executions/run-one/presentation/delivery-extra", False),
+        ("/api/v1/contexts/threads/thread-one/presentation/delivery", False),
+        ("/api/v1/contexts/executions/run-one?next=/presentation/delivery", False),
         ("/internal/document-reads/claim", True),
         ("/internal/document-captures", True),
         ("/internal/dataset-preparations/claim", True),
@@ -105,21 +113,31 @@ def test_relays_each_request_to_its_service_and_closes_after_it():
             upload = await client.post("/api/v1/files/uploads", content=b"x" * 200_000)
             stream = await client.get("/api/v1/files/stream")
             space = await client.get("/api/v1/space/browse")
+            delivery = await client.post(
+                "/api/v1/contexts/executions/run-one/presentation/delivery",
+                json={"execution_category": "Overview"},
+            )
+            context = await client.get("/api/v1/contexts/executions/run-one")
         for server in (door, backend, platform):
             server.close()
-        return seen, health, upload, stream, space
+        return seen, health, upload, stream, space, delivery, context
 
-    seen, health, upload, stream, space = asyncio.run(scenario())
+    seen, health, upload, stream, space, delivery, context = asyncio.run(scenario())
     assert health.json()["upstream"] == "backend"
     assert health.headers["connection"] == "close"
     assert upload.json() == {"upstream": "platform", "body": "x" * 200_000}
     assert stream.text == "firstsecond"
     assert space.json()["upstream"] == "platform"
+    assert delivery.json()["upstream"] == "platform"
+    assert json.loads(delivery.json()["body"]) == {"execution_category": "Overview"}
+    assert context.json()["upstream"] == "backend"
     assert [(name, line) for name, line, _, _ in seen] == [
         ("backend", "GET /api/v1/health HTTP/1.1"),
         ("platform", "POST /api/v1/files/uploads HTTP/1.1"),
         ("platform", "GET /api/v1/files/stream HTTP/1.1"),
         ("platform", "GET /api/v1/space/browse HTTP/1.1"),
+        ("platform", "POST /api/v1/contexts/executions/run-one/presentation/delivery HTTP/1.1"),
+        ("backend", "GET /api/v1/contexts/executions/run-one HTTP/1.1"),
     ]
     # A loopback client's X-User-Id still reaches Backend; every request asks to close.
     assert seen[0][2]["X-User-Id"] == "u1"

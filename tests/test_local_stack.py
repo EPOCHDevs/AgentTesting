@@ -32,6 +32,49 @@ def test_occupied_port_is_not_reused():
             local_stack.check_ports([sock.getsockname()[1]])
 
 
+def test_study_peer_uses_one_private_persistent_local_credential(tmp_path):
+    first = local_stack.study_access(tmp_path)
+    assert set(first) == {local_stack.STUDY_PEER_TOKEN}
+    path = tmp_path / "study-peer-token"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert len(first[local_stack.STUDY_PEER_TOKEN]) >= 32
+    assert local_stack.study_access(tmp_path) == first
+    path.chmod(0o644)
+    with pytest.raises(ValueError, match="private regular"):
+        local_stack.study_access(tmp_path)
+
+
+def test_study_peer_refuses_a_symlink_before_writing(tmp_path):
+    target = tmp_path / "must-not-create"
+    (tmp_path / "study-peer-token").symlink_to(target)
+    with pytest.raises(ValueError, match="private regular"):
+        local_stack.study_access(tmp_path)
+    assert not target.exists()
+
+
+def test_platform_study_origins_are_local_and_cannot_inherit_cloud_run_storage(tmp_path, monkeypatch):
+    main = tmp_path / "apps/platform/dist/main.js"
+    main.parent.mkdir(parents=True)
+    main.touch()
+    monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0))
+    peer = local_stack.study_access(tmp_path / "state")
+    base = {"EPOCH_RUN_STORE_BUCKET": "foreign", "EPOCH_RUN_STORE_INDEX_TABLE": "foreign",
+            "EPOCH_RUN_STORE_URL": "https://services.dev.epoch.trade", "AWS_PROFILE": "foreign",
+            "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(tmp_path / "foreign")}
+    service = local_stack.prepare_platform(tmp_path, "/bin/node", base, {}, peer,
+        tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference", study_agent_origin="http://localhost:2024")
+    env = service[3]
+    assert env["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
+    assert env["EPOCH_STUDY_AGENT_ORIGIN"] == "http://localhost:2024"
+    assert env["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    for key in ["EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL", "AWS_PROFILE"]:
+        assert key not in env
+    for origin in [None, "https://agent.example", "http://user:password@localhost:2024", "http://localhost:2024/foreign"]:
+        with pytest.raises(ValueError, match="loopback Agent"):
+            local_stack.prepare_platform(tmp_path, "/bin/node", base, {}, peer,
+                tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference", study_agent_origin=origin)
+
+
 @pytest.mark.parametrize("setting", [
     "EPOCH_IDENTITY_GDS_URL=https://identity.example\n",
     "EPOCH_IDENTITY_GDS_TOKEN=independent-identity-credential\n",
@@ -62,12 +105,14 @@ def test_platform_model_export_uses_the_allocated_local_native_origin(tmp_path, 
     monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 0))
     service = local_stack.prepare_platform(
-        tmp_path, "/bin/node", {"AWS_PROFILE": "must-not-inherit"}, {}, {},
+        tmp_path, "/bin/node", {"AWS_PROFILE": "must-not-inherit",
+                               "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(tmp_path / "foreign")}, {}, {},
         tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference",
     )
     env = service[3]
     assert env["EPOCH_MODEL_EXPORT_SERVER_URL"] == f"http://127.0.0.1:{native_port}"
     assert env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    assert "EPOCH_STUDY_NATIVE_PERSONAL_ROOT" not in env
     assert env["EPOCH_ENVIRONMENT"] == "local"
     assert "EPOCH_RUN_STORE_BUCKET" not in env
     assert "EPOCH_RUN_STORE_INDEX_TABLE" not in env
@@ -150,6 +195,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     config.write_text("")
     monkeypatch.setenv("EPOCH_TOKEN", "must-not-inherit")
     monkeypatch.setenv("TEST_EPOCH_PASSWORD", "must-not-inherit")
+    monkeypatch.setenv("EPOCH_RUN_STORE_TOKEN", "must-not-reach-ai-or-ui")
+    monkeypatch.setenv("EPOCH_RUN_STORE_URL", "https://must-not-use-shared.example")
     monkeypatch.setattr(local_stack.shutil, "which", lambda name, **_: "/bin/" + name)
     monkeypatch.setattr(
         local_stack.subprocess, "check_output", lambda *_, **__: "v24.1.0"
@@ -187,6 +234,16 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert files[3]["EPOCH_ENVIRONMENT"] == "local" and files[3]["EPOCH_PLATFORM_ROLE"] == "general"
     assert files[3]["PORT"] == str(local_stack.PLATFORM_PORT)
     assert files[3]["EPOCH_PLATFORM_REVISION"] == "p" * 40
+    assert files[3]["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
+    assert files[3]["EPOCH_STUDY_AGENT_ORIGIN"] == stack.ai_url
+    assert files[3]["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(
+        Path(be[3]["EPOCH_PROJECT_DIR"]) / "personal_content")
+    peer = files[3][local_stack.STUDY_PEER_TOKEN]
+    assert be[3][local_stack.STUDY_PEER_TOKEN] == peer and len(peer) >= 32
+    assert local_stack.STUDY_PEER_TOKEN not in _agent[3]
+    assert local_stack.STUDY_PEER_TOKEN not in portal[3]
+    assert "EPOCH_RUN_STORE_URL" not in be[3]
+    assert "EPOCH_RUN_STORE_BUCKET" not in files[3] and "EPOCH_RUN_STORE_INDEX_TABLE" not in files[3]
     assert files[3]["COGNITO_CLIENT_IDS"].split(",") == [local_stack.CLIENT, local_stack.CLI_CLIENT]
     assert files[3]["EPOCH_TOKEN_ISSUER"] == "http://localhost:2024"
     assert files[3]["EPOCH_TOKEN_JWKS_URL"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}/api/v1/auth/jwks"
