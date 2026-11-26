@@ -456,9 +456,8 @@ def launch(wire: Wire, case, source: str, execution: str, stage: Path, *, sleep=
     return definition
 
 
-def read_answer(wire: Wire, case, execution: str) -> dict:
-    import pyarrow as pa
-    import pyarrow.ipc as ipc
+def read_answer(wire: Wire, case, execution: str, evidence: Path) -> dict:
+    from .family_consumers import read_arrow_page
     root = '/api/v1/studies/executions/' + execution
     output = wire.call('GET', root + '/outputs')
     if output['execution_id'] != execution or type(output['response_version']) is not int or output['response_version'] < 1:
@@ -475,14 +474,13 @@ def read_answer(wire: Wire, case, execution: str) -> dict:
     if ref['execution_id'] != execution or ref['row_count'] != (40 if case.family == 'HMM' else 4):
         raise AssertionError('Answer execution or complete row count changed')
     wire.guard.bind_table(execution, ref)
-    rows = []
+    rows, schemas = [], []
     for offset in range(0, ref['row_count'], 17):
         query = {'table': ref['table'], 'field_ids': ref['field_ids'], 'offset': offset, 'page_size': 17}
-        table = ipc.open_stream(pa.BufferReader(wire.post(root + '/response-tables', query, binary=True))).read_all()
-        if table.column_names != ref['field_ids'] or table.num_rows != min(17, ref['row_count'] - offset):
-            raise AssertionError('Arrow transfer changed complete row/field shape')
-        columns = [c.cast(pa.int64()).to_pylist() if pa.types.is_timestamp(c.type) else c.to_pylist() for c in table.columns]
-        rows.extend(list(map(list, zip(*columns))))
+        page, schema = read_arrow_page(wire.post(root + '/response-tables', query, binary=True),
+            family=case.family, fields=ref['field_ids'], offset=offset, row_count=ref['row_count'], evidence=evidence)
+        rows.extend(page); schemas.append(schema)
+    durable(evidence / 'arrow-page-schemas.json', schemas)
     return {'columns': ref['field_ids'], 'rows': rows}
 
 
@@ -541,7 +539,7 @@ def run_cloud(case, evidence: Path, token_provider, dispatch: str = 'inprocess')
             for index, (source, execution) in enumerate(zip(sources(case), case.cloud.executions)):
                 stage = evidence / f'consumer-{index}'
                 definitions.append(launch(wire, case, source, execution, stage))
-                answer = read_answer(wire, case, execution)
+                answer = read_answer(wire, case, execution, stage)
                 durable(stage / 'answers.json', answer)
                 answers.append(answer)
             if selection(wire, case) != first:

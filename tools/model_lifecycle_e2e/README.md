@@ -416,6 +416,11 @@ reach EpochPlatform through that API host; `services.dev.epoch.trade` exposes
 internal service routes and does not serve public Models. No alternate hosts,
 ports, paths, redirects, localhost/cloud mixtures or server-export bridge.
 This is an engineering harness, not a new product surface or a campaign verdict.
+Local and cloud family consumers check physical Arrow schemas before converting
+values: HMM uses a UTC nanosecond timestamp coordinate and three Float64 columns;
+ARIMA/GARCH forecasts use an Int64 horizon and their declared Float64 outputs.
+All require zero nulls. Each page retains its actual ordered schema, timezone,
+unit, row and null counts, including the schema that caused a refusal.
 The transport accepts the registered success status for each admitted route:
 201 for Native definition creation and execution submission; 200 for compile,
 Arrow table reads and admitted GETs. Other statuses stop the spent attempt,

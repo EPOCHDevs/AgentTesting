@@ -345,6 +345,42 @@ def compare_hmm_prefix(base: dict, changed: dict) -> None:
     validate_hmm_table(changed, changed_suffix=True)
 
 
+def read_arrow_page(raw: bytes, *, family: Family, fields: list[str], offset: int,
+                    row_count: int, evidence: Path) -> tuple[list[list], dict]:
+    """Retain the actual schema and check wire types before converting values."""
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    from .family_cloud import durable
+    table = ipc.open_stream(pa.BufferReader(raw)).read_all()
+    witness = {'offset': offset, 'requested_page_size': 17, 'row_count': table.num_rows,
+        'ordered_fields': [{'name': field.name, 'physical_type': str(field.type),
+            'field_nullable': field.nullable, 'null_count': table.column(index).null_count,
+            'timestamp_unit': field.type.unit if pa.types.is_timestamp(field.type) else None,
+            'timezone': field.type.tz if pa.types.is_timestamp(field.type) else None}
+            for index, field in enumerate(table.schema)]}
+    durable(evidence / f'arrow-page-{offset}-schema.json', witness)
+    if table.column_names != fields or table.num_rows != min(17, row_count - offset):
+        raise AssertionError('Arrow transfer omitted rows or changed declared field order')
+    contracts = {
+        'HMM': (40, ['coordinate', 'observed', 'p0', 'p1'],
+                [pa.timestamp('ns', tz='UTC'), pa.float64(), pa.float64(), pa.float64()]),
+        'ARIMA': (4, ['horizon', 'forecast', 'forecast_lower', 'forecast_upper'],
+                  [pa.int64(), pa.float64(), pa.float64(), pa.float64()]),
+        'GARCH': (4, ['horizon', 'forecast_variance', 'forecast_volatility'],
+                  [pa.int64(), pa.float64(), pa.float64()]),
+    }
+    expected_rows, expected_fields, expected_types = contracts[family]
+    if row_count != expected_rows or fields != expected_fields:
+        raise AssertionError(f'{family} Arrow output differs from the registered row/field shape')
+    if [field.type for field in table.schema] != expected_types:
+        raise AssertionError(f'{family} Arrow physical types changed (HMM coordinate requires UTC nanoseconds)')
+    if any(column.null_count for column in table.columns):
+        raise AssertionError(f'{family} Arrow output contains nulls')
+    columns = [column.cast(pa.int64()).to_pylist() if pa.types.is_timestamp(column.type)
+               else column.to_pylist() for column in table.columns]
+    return list(map(list, zip(*columns))), witness
+
+
 def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
         dispatch: str = 'inprocess') -> None:
     if case.cloud:
@@ -426,17 +462,16 @@ def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
             ref = parts[0].source
             if ref.execution_id != execution:
                 raise AssertionError('Answer rows came from another execution')
-            rows = []
+            rows, schemas = [], []
             for offset in range(0, ref.row_count, 17):
                 body = b''.join(native.research_responses.read_research_response_table(execution,
                     table=ref.table, field_ids=ref.field_ids, offset=offset, page_size=17,
                     request_options={'max_retries': 0}))
-                table = ipc.open_stream(pa.BufferReader(body)).read_all()
-                if table.column_names != ref.field_ids or table.num_rows != min(17, ref.row_count-offset):
-                    raise AssertionError('Arrow transfer omitted rows or changed declared field order')
-                columns = [c.cast(pa.int64()).to_pylist() if pa.types.is_timestamp(c.type) else c.to_pylist()
-                           for c in table.columns]
-                rows.extend(list(map(list, zip(*columns))))
+                page, schema = read_arrow_page(body, family=case.family, fields=ref.field_ids,
+                    offset=offset, row_count=ref.row_count, evidence=stage)
+                rows.extend(page); schemas.append(schema)
+            from .family_cloud import durable
+            durable(stage / 'arrow-page-schemas.json', schemas)
             answer = {'columns': ref.field_ids, 'rows': rows}
             write(stage / 'answers.json', answer)
             answers.append(answer)
