@@ -1,4 +1,4 @@
-"""Explicit, root-admitted local consumers; no producer/Save/cleanup automation.
+"""Explicit, root-admitted consumers; no producer/Save/cleanup automation.
 
 Run each temporary/saved/post-cleanup forecast case separately. Temporary HMM
 consumes the same fit twice with a shared five-row prefix and changed suffix;
@@ -25,6 +25,7 @@ from .families import Family, family_source, synthetic_value
 from .family_forecasts import HORIZONS, forecast_source, retained_contract
 from .forecast_oracle import arima_future, decode_arima, decode_garch, garch_future
 from .native_artifact import ENVELOPE, MAX_BYTES
+from .family_cloud import CloudAdmission, admit_cloud, canonical_origins
 
 TOKEN_PROVIDER_PATH = Path('/home/adesola/EpochDev/EpochAI/tools/cognito_auth.py')
 TOKEN_PROVIDER_SHA256 = '04281614f60473dac30325b23389c165d5ef9fe9282785250fb87170a242a9ed'
@@ -48,7 +49,7 @@ class Case:
     stage: Literal['temporary', 'saved', 'post_cleanup']
     native_url: str
     platform_url: str
-    native_root: Path
+    native_root: Path | None
     native_source: str
     owner: str
     producer: str
@@ -66,6 +67,7 @@ class Case:
     root_packet_sha256: str
     producer_witness_sha256: str
     hmm_reference: HMMReplayReference | None = None
+    cloud: CloudAdmission | None = None
 
 
 def _read(path: Path, limit: int = MAX_BYTES) -> bytes:
@@ -91,7 +93,7 @@ def _loopback(value: str) -> str:
     return value.rstrip('/')
 
 
-def load_case(path: Path, expected_sha256: str) -> Case:
+def load_case(path: Path, expected_sha256: str, *, mode: str = 'loopback') -> Case:
     body = _read(path)
     if hashlib.sha256(body).hexdigest() != expected_sha256:
         raise ValueError('Case admission bytes changed')
@@ -100,10 +102,13 @@ def load_case(path: Path, expected_sha256: str) -> Case:
         raise ValueError('An actual root-issued consumer admission is required')
     runtime_body, runtime_sha = _reference(value['root_runtime_packet'])
     runtime = json.loads(runtime_body)
+    if mode not in {'loopback', 'dev-cloud'} or value.get('mode', 'loopback') != mode:
+        raise ValueError('Cloud mode requires explicit matching admission and CLI opt-in')
     required_runtime = {
-        'kind': 'ROOT_ADMITTED_PRIMARY_MODEL_LIFECYCLE_RUNTIME_V1', 'ready': True,
+        'kind': ('ROOT_ADMITTED_DEV_MODEL_LIFECYCLE_RUNTIME_V1' if mode == 'dev-cloud'
+                 else 'ROOT_ADMITTED_PRIMARY_MODEL_LIFECYCLE_RUNTIME_V1'), 'ready': True,
         'native_url': value['native_url'], 'platform_url': value['platform_url'],
-        'native_root': value['native_root'], 'native_source': value['native_source'],
+        'native_root': value.get('native_root'), 'native_source': value['native_source'],
         'owner_user_id': value['owner_user_id'],
     }
     if runtime.get('ready') is not True or any(runtime.get(k) != v for k, v in required_runtime.items()):
@@ -179,23 +184,29 @@ def load_case(path: Path, expected_sha256: str) -> Case:
         raise ValueError('Oracle artifact manifest differs from the actual producer descriptor')
     if not value['owner_user_id'] or not re.fullmatch('[a-f0-9]{40}', value['native_source']):
         raise ValueError('Explicit expected owner and actual native source are required')
-    native_root = Path(value['native_root'])
-    if not native_root.is_absolute() or not native_root.is_dir():
+    cloud = admit_cloud(value, runtime, path, _reference) if mode == 'dev-cloud' else None
+    native_root = None if cloud else Path(value['native_root'])
+    if not cloud and (not native_root.is_absolute() or not native_root.is_dir()):
         raise ValueError('Use the admitted absolute primary runtime storage root')
+    origins = (canonical_origins(value['native_url'], value['platform_url']) if cloud else
+               (_loopback(value['native_url']), _loopback(value['platform_url'])))
     provider = Path(value['token_provider_file'])
     if (provider != TOKEN_PROVIDER_PATH
             or value['token_provider_sha256'] != TOKEN_PROVIDER_SHA256
             or hashlib.sha256(_read(provider)).hexdigest() != value['token_provider_sha256']):
         raise ValueError('Use the admitted unchanged maintained opaque token provider')
-    return Case(cast(Family, family), cast(Literal['temporary', 'saved', 'post_cleanup'], stage),
-                _loopback(value['native_url']), _loopback(value['platform_url']),
+    case = Case(cast(Family, family), cast(Literal['temporary', 'saved', 'post_cleanup'], stage),
+                *origins,
                 native_root, value['native_source'], value['owner_user_id'],
                 value['producer_execution_id'], value['fit_name'], value['digest'],
                 value['producer_config_sha256'], value['producer_source_sha256'],
                 value['fit_cutoff'], artifact,
                 value['saved_model_ref'] if saved else value['fit_name'], manifest,
                 provider, value['token_provider_sha256'], expected_sha256, runtime_sha, producer_sha,
-                hmm_reference)
+                hmm_reference, cloud)
+    if cloud and tuple(hashlib.sha256(x.encode()).hexdigest() for x in sources(case)) != cloud.source_sha256:
+        raise ValueError('Prepared consumer source differs from the exact root cloud admission')
+    return case
 
 
 def sources(case: Case) -> tuple[str, ...]:
@@ -336,6 +347,10 @@ def compare_hmm_prefix(base: dict, changed: dict) -> None:
 
 def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
         dispatch: str = 'inprocess') -> None:
+    if case.cloud:
+        from .family_cloud import run_cloud
+        run_cloud(case, evidence, token_provider, dispatch)
+        return
     if not evidence.is_absolute():
         raise ValueError('Use an explicit absolute new evidence directory')
     if evidence.exists():
@@ -449,9 +464,23 @@ def main() -> None:
     parser.add_argument('--admission-sha256', required=True)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--dispatch', choices=['inprocess', 'subprocess'], default='inprocess')
+    parser.add_argument('--mode', choices=['loopback', 'dev-cloud'], default='loopback')
+    parser.add_argument('--plan', action='store_true', help='Print the admitted request caps without credentials or calls')
+    parser.add_argument('--finalize', type=Path, help='Root-pinned actual sealed-config capture; offline only')
+    parser.add_argument('--finalize-sha256')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
-    case = load_case(args.admission, args.admission_sha256)
+    case = load_case(args.admission, args.admission_sha256, mode=args.mode)
+    if sum((args.execute, args.plan, args.finalize is not None)) != 1:
+        parser.error('Choose exactly one of --plan, --execute or --finalize')
+    if args.plan:
+        from .family_cloud import stage_plan
+        print(json.dumps(stage_plan(case.family, case.stage), indent=2))
+        return
+    if args.finalize:
+        from .family_cloud import finalize
+        finalize(case, args.evidence, args.finalize, args.finalize_sha256)
+        return
     if not args.execute:
         parser.error('Source preparation only; actual root readiness and explicit --execute are required')
     spec = importlib.util.spec_from_file_location('epoch_primary_opaque_token_provider', case.provider_file)
