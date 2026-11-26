@@ -4,3 +4,4 @@ langsmith==0.14.17
 playwright==1.65.2
 pycognito==2024.5.1
 python-dotenv==1.2.1
+pyarrow==26.0.1
