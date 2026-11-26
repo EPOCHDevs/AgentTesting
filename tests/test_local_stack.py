@@ -59,12 +59,14 @@ def test_platform_study_origins_are_local_and_cannot_inherit_cloud_run_storage(t
     monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0))
     peer = local_stack.study_access(tmp_path / "state")
     base = {"EPOCH_RUN_STORE_BUCKET": "foreign", "EPOCH_RUN_STORE_INDEX_TABLE": "foreign",
-            "EPOCH_RUN_STORE_URL": "https://services.dev.epoch.trade", "AWS_PROFILE": "foreign"}
+            "EPOCH_RUN_STORE_URL": "https://services.dev.epoch.trade", "AWS_PROFILE": "foreign",
+            "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(tmp_path / "foreign")}
     service = local_stack.prepare_platform(tmp_path, "/bin/node", base, {}, peer,
         tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference", study_agent_origin="http://localhost:2024")
     env = service[3]
     assert env["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
     assert env["EPOCH_STUDY_AGENT_ORIGIN"] == "http://localhost:2024"
+    assert env["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
     for key in ["EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL", "AWS_PROFILE"]:
         assert key not in env
     for origin in [None, "https://agent.example", "http://user:password@localhost:2024", "http://localhost:2024/foreign"]:
@@ -103,12 +105,14 @@ def test_platform_model_export_uses_the_allocated_local_native_origin(tmp_path, 
     monkeypatch.setattr(local_stack.subprocess, "run", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 0))
     service = local_stack.prepare_platform(
-        tmp_path, "/bin/node", {"AWS_PROFILE": "must-not-inherit"}, {}, {},
+        tmp_path, "/bin/node", {"AWS_PROFILE": "must-not-inherit",
+                               "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(tmp_path / "foreign")}, {}, {},
         tmp_path / "project", "p" * 40, tmp_path, tmp_path / "reference",
     )
     env = service[3]
     assert env["EPOCH_MODEL_EXPORT_SERVER_URL"] == f"http://127.0.0.1:{native_port}"
     assert env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    assert "EPOCH_STUDY_NATIVE_PERSONAL_ROOT" not in env
     assert env["EPOCH_ENVIRONMENT"] == "local"
     assert "EPOCH_RUN_STORE_BUCKET" not in env
     assert "EPOCH_RUN_STORE_INDEX_TABLE" not in env
@@ -232,6 +236,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert files[3]["EPOCH_PLATFORM_REVISION"] == "p" * 40
     assert files[3]["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
     assert files[3]["EPOCH_STUDY_AGENT_ORIGIN"] == stack.ai_url
+    assert files[3]["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(
+        Path(be[3]["EPOCH_PROJECT_DIR"]) / "personal_content")
     peer = files[3][local_stack.STUDY_PEER_TOKEN]
     assert be[3][local_stack.STUDY_PEER_TOKEN] == peer and len(peer) >= 32
     assert local_stack.STUDY_PEER_TOKEN not in _agent[3]

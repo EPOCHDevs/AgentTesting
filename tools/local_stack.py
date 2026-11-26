@@ -720,7 +720,8 @@ def prepare_platform(
     # No AWS credentials reach it: local Files must never fall back to a cloud store.
     env = {key: value for key, value in base.items() if not key.startswith("AWS_")}
     for key in ("EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL",
-                "EPOCH_STUDY_NATIVE_ORIGIN", "EPOCH_STUDY_AGENT_ORIGIN", STUDY_PEER_TOKEN):
+                "EPOCH_STUDY_NATIVE_ORIGIN", "EPOCH_STUDY_AGENT_ORIGIN",
+                "EPOCH_STUDY_NATIVE_PERSONAL_ROOT", STUDY_PEER_TOKEN):
         env.pop(key, None)
     env.update({
         "AWS_CONFIG_FILE": os.devnull,
@@ -745,7 +746,8 @@ def prepare_platform(
                 or origin.username or origin.password or origin.path not in {"", "/"} or origin.query or origin.fragment):
             raise ValueError("Local Study source resolution requires the configured loopback Agent origin")
         env.update({"EPOCH_STUDY_NATIVE_ORIGIN": f"http://127.0.0.1:{BACKEND_PORT}",
-                    "EPOCH_STUDY_AGENT_ORIGIN": study_agent_origin or ""})
+                    "EPOCH_STUDY_AGENT_ORIGIN": study_agent_origin or "",
+                    "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(project / "personal_content")})
     # GDS is a shared catalogue service in deployed stacks too. Read only its
     # explicit connection settings; local Files and observation reads stay local.
     settings = platform / ".env.local"
