@@ -42,8 +42,11 @@ def stage_plan(family: str, stage: str) -> dict:
 
 
 def source_hashes() -> dict[str, str]:
-    return {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in SOURCE_FILES}
+    hashes = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+              for name in SOURCE_FILES}
+    hashes['tools/executions.py'] = hashlib.sha256(
+        (Path(__file__).parent.parent / 'executions.py').read_bytes()).hexdigest()
+    return hashes
 
 
 def producer_request_plan(family: str, execution: str, fit_name: str) -> dict:
@@ -258,21 +261,70 @@ class Wire:
         prefix = self.root / f'wire-{self.sequence:03d}'
         durable(prefix.with_suffix('.request.json'), {'method': method, 'url': url, 'json': body})
         # No credential headers are retained. Redirects and automatic retries are disabled.
+        execution_record = (method == 'GET' and origin == NATIVE and path in {
+            '/api/v1/studies/executions/' + execution for execution in self.guard.case.cloud.executions})
         with self.client.stream(method, url, json=body) as response:
             chunks, count, deadline = [], 0, time.monotonic() + 45
-            for part in response.iter_bytes():
-                count += len(part)
-                if count > 8 * 1024 * 1024 or time.monotonic() > deadline:
-                    raise ValueError('Response exceeded bounded evidence size/time')
-                chunks.append(part)
+            wire_hash = hashlib.sha256()
+            try:
+                for part in response.iter_raw():
+                    count += len(part)
+                    wire_hash.update(part)
+                    if count > 8 * 1024 * 1024 or time.monotonic() > deadline:
+                        raise ValueError('Response exceeded bounded evidence size/time')
+                    chunks.append(part)
+            except BaseException as error:
+                if execution_record:
+                    durable(prefix.with_suffix('.response.json'), {'status': response.status_code,
+                        'wire_body_complete': False, 'received_body_bytes': count,
+                        'received_body_sha256': wire_hash.hexdigest(), 'body_omitted': True,
+                        'retention': 'execution_metadata_body_omitted', 'error_type': type(error).__name__})
+                raise
             raw = b''.join(chunks)
+            metadata = {'status': response.status_code, 'wire_body_bytes': len(raw),
+                        'wire_body_sha256': wire_hash.hexdigest(), 'wire_body_complete': True,
+                        'content_encoding': response.headers.get('content-encoding', 'identity')}
+            retained = raw
+            value = None
+            try:
+                # Preserve actual encoded wire hashes independently of decoded application bytes.
+                if metadata['content_encoding'] != 'identity':
+                    import httpx
+                    decoded, decoded_count = [], 0
+                    local = httpx.Response(response.status_code,
+                        headers={'content-encoding': metadata['content_encoding']},
+                        stream=httpx.ByteStream(raw))
+                    try:
+                        for part in local.iter_bytes(chunk_size=65536):
+                            decoded_count += len(part)
+                            if decoded_count > 8 * 1024 * 1024:
+                                raise ValueError('Decoded response exceeded evidence size bound')
+                            decoded.append(part)
+                    finally:
+                        local.close()
+                    retained = b''.join(decoded)
+                if execution_record:
+                    # Only the successful Native execution DTO has this narrow grant policy.
+                    from tools.executions import redact_execution_metadata
+                    if response.status_code != 200:
+                        raise ValueError('Non-200 Native execution metadata')
+                    value = redact_execution_metadata(json.loads(retained))
+                    retained = json.dumps(value, indent=2, allow_nan=False).encode() + b'\n'
+                    metadata['retention'] = 'native_execution_metadata_redacted'
+                else:
+                    metadata['retention'] = 'unmodified_application_body'
+            except Exception:
+                if execution_record:
+                    durable(prefix.with_suffix('.response.json'), {**metadata,
+                        'retention': 'execution_metadata_body_omitted', 'body_omitted': True})
+                raise
             with os.fdopen(os.open(prefix.with_suffix('.response.bin'), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as output:
-                output.write(raw); output.flush(); os.fsync(output.fileno())
-            durable(prefix.with_suffix('.response.json'), {'status': response.status_code,
-                'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+                output.write(retained); output.flush(); os.fsync(output.fileno())
+            durable(prefix.with_suffix('.response.json'), {**metadata,
+                'retained_body_bytes': len(retained), 'retained_body_sha256': hashlib.sha256(retained).hexdigest()})
             if response.status_code != 200:
                 raise ValueError('Non-200 response stops this attempt; no retries')
-        return raw if binary else json.loads(raw)
+        return retained if binary else value if execution_record else json.loads(retained)
 
     def post(self, path: str, body: dict, *, binary=False):
         self.guard.expect_post(path, body)
@@ -374,7 +426,8 @@ def launch(wire: Wire, case, source: str, execution: str, stage: Path, *, sleep=
             raise AssertionError('Actual job identity changed')
         status = job['status'].lower()
         if status in {'completed', 'failed', 'cancelled'}:
-            durable(stage / 'terminal-job.json', job)
+            from tools.executions import redact_execution_metadata
+            durable(stage / 'terminal-job.json', redact_execution_metadata(job))
             if status != 'completed': raise AssertionError('Consumer did not complete')
             wire.guard.completed.add(execution)
             break

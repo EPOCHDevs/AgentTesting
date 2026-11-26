@@ -427,7 +427,8 @@ Root supplies the existing consumer admission fields plus:
   definition/config and match the actual shared generation. No relabelled local fit.
 - `acceptance_plan` referencing the existing v6 bytes, SHA-256
   `c99882765cc724c111809ad6cfa7cff109fc1da7d55d90986b17729db7068d28`,
-  `harness_sources` exactly from `family_cloud.source_hashes()`, and `request_plan`
+  `harness_sources` exactly from `family_cloud.source_hashes()` (including the
+  shared `tools/executions.py` metadata retention policy), and `request_plan`
   exactly from `family_cloud.stage_plan(family, stage)`. Reference shape is
   `{"path": "/absolute/ordinary/file", "sha256": "<64 lowercase hex>"}`.
 - Existing selected artifact bytes and the unchanged maintained opaque credential
@@ -453,7 +454,14 @@ Per invocation GETs comprise health 1, inventory before/after 2, exact selection
 before/after 2; per execution, at most 60 terminal polls, 20 log pages of 100,
 and one each of as-run study, historical lifecycle, empty-fit roster, outputs
 and bound response. These are ceilings, not read quotas. Every actual request
-is retained before forwarding; raw bounded replies are retained before parsing.
+is retained before forwarding. Ordinary bounded replies retain unchanged
+application bytes. Native execution-metadata GETs use the existing narrow
+`artifact_source.signed_query` redaction **before any body retention**, including
+nonterminal polls and the terminal-job copy. Malformed, error or partial execution
+bodies are omitted; only status, sizes and complete/prefix hashes are retained.
+Metadata labels the actual encoded wire-body hash separately from the retained
+redacted-body hash. There is no generic JSON/string scanning or redaction of
+model facts, source or Arrow payloads.
 Only exact generated source/write bodies and actual bound table/page reads can
 be POSTed. Normal API errors stop the attempt, including redirects. There are
 zero Save, export, S3, provider/vendor, restart and cleanup calls.

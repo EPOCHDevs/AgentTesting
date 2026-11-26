@@ -1,5 +1,6 @@
 """Offline admission/routing/capture controls. No provider, SDK or live requests."""
 import copy
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -17,6 +18,12 @@ PRODUCER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 EXECUTION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 DEFINITION = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 CASE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+
+
+def http_reply(status, *, value=None, content=None, headers=None):
+    import httpx
+    raw = json.dumps(value, separators=(',', ':')).encode() if content is None else content
+    return httpx.Response(status, stream=httpx.ByteStream(raw), headers=headers)
 
 
 class CloudTest(unittest.TestCase):
@@ -166,7 +173,7 @@ class CloudTest(unittest.TestCase):
             root.mkdir()
             def handler(request):
                 self.assertEqual(str(request.url), cloud.NATIVE + '/health')
-                return httpx.Response(status, json={'git_sha': case.native_source})
+                return http_reply(status, value={'git_sha': case.native_source})
             with httpx.Client(transport=httpx.MockTransport(handler), headers={'Authorization': 'Bearer opaque-test-only'}) as client:
                 wire = cloud.Wire(client, cloud.RouteGuard(case), root)
                 if status == 200:
@@ -187,37 +194,139 @@ class CloudTest(unittest.TestCase):
             'fit_execution_id': PRODUCER}, 'inputs': {'__model_artifact': {
                 'kind': 'literal', 'literal_value': json.dumps(case.digest)}}} for _ in range(4)]
         seen = []
+        jobs = []
+        sentinel = 'TEST-SIGNED-QUERY-SENTINEL-MUST-NOT-BE-RETAINED'
         def handler(request):
             path = request.url.path
             seen.append((request.method, path))
-            if path.endswith('/compile-view'): return httpx.Response(200, json={'nodes': nodes})
-            if path == '/api/v1/studies/definitions': return httpx.Response(200, json={'id': DEFINITION})
+            if path.endswith('/compile-view'): return http_reply(200, value={'nodes': nodes})
+            if path == '/api/v1/studies/definitions': return http_reply(200, value={'id': DEFINITION})
             if path == '/api/v1/studies/executions':
                 body = json.loads(request.content)
                 self.assertEqual(body, {'id': DEFINITION, 'execution_id': EXECUTION})
-                return httpx.Response(200, json={'id': EXECUTION})
+                return http_reply(200, value={'id': EXECUTION})
             if path.endswith('/study'):
-                return httpx.Response(200, json={'execution_id': EXECUTION, 'definition_id': DEFINITION,
+                return http_reply(200, value={'execution_id': EXECUTION, 'definition_id': DEFINITION,
                     'study': {'source': source}})
             if path.endswith('/logs'):
-                return httpx.Response(200, json={'pagination': {'offset': 0, 'total': 1, 'has_more': False},
+                return http_reply(200, value={'pagination': {'offset': 0, 'total': 1, 'has_more': False},
                     'events': [{'event_id': 'normal-log', 'context': {}, 'message': 'completed'}]})
             if path.endswith('/stream'):
-                return httpx.Response(200, content=('event: lifecycle\ndata: ' + json.dumps({
+                return http_reply(200, content=('event: lifecycle\ndata: ' + json.dumps({
                     'operation_type': 'job', 'operation_name': EXECUTION, 'status': 'completed'})
                     + '\n\nevent: status\ndata: {"status":"completed"}\n\n').encode())
-            if path.endswith('/model-fits'): return httpx.Response(200, json={'items': [], 'next_cursor': ''})
+            if path.endswith('/model-fits'): return http_reply(200, value={'items': [], 'next_cursor': ''})
             self.assertEqual(path, '/api/v1/studies/executions/' + EXECUTION)
-            return httpx.Response(200, json={'id': EXECUTION, 'definition_id': DEFINITION, 'status': 'Completed'})
+            job = {'id': EXECUTION, 'definition_id': DEFINITION, 'owner_user_id': OWNER,
+                   'status': 'completed' if jobs else 'running', 'ordinary_fact': {'preserved': True},
+                   'artifact_source': {'kind': 'cloudfront', 'base_url': 'https://cdn.invalid/owned/',
+                       'manifest_url': 'https://cdn.invalid/owned/charts/manifest.json',
+                       'expires_epoch': 123456, 'signed_query': sentinel}}
+            jobs.append(copy.deepcopy(job))
+            return http_reply(200, value=job)
         guard = cloud.RouteGuard(case)
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             definition = cloud.launch(cloud.Wire(client, guard, self.root), case, source, EXECUTION,
-                self.root / 'consumer', sleep=lambda _: self.fail('No retry/sleep after Completed'))
+                self.root / 'consumer', sleep=lambda _: None)
         self.assertEqual(definition, DEFINITION)
         self.assertEqual(sum(method == 'POST' for method, _ in seen), 3)
-        self.assertEqual(sum(method == 'GET' for method, _ in seen), 5)
+        self.assertEqual(sum(method == 'GET' for method, _ in seen), 6)
         self.assertTrue((self.root / 'consumer/fit-effects.json').is_file())
         self.assertFalse((self.root / 'consumer/config.json').exists())
+        for index, job in enumerate(jobs, 4):
+            prefix = self.root / f'wire-{index:03d}'
+            metadata = json.loads(prefix.with_suffix('.response.json').read_text())
+            wire_bytes = json.dumps(job, separators=(',', ':')).encode()
+            job['artifact_source']['signed_query'] = '[REDACTED]'
+            retained = prefix.with_suffix('.response.bin').read_bytes()
+            self.assertEqual(json.loads(retained), job)
+            self.assertEqual(metadata['wire_body_sha256'], hashlib.sha256(wire_bytes).hexdigest())
+            self.assertEqual(metadata['retained_body_sha256'], hashlib.sha256(retained).hexdigest())
+            self.assertNotEqual(metadata['wire_body_sha256'], metadata['retained_body_sha256'])
+            self.assertEqual(metadata['retention'], 'native_execution_metadata_redacted')
+        self.assertEqual(json.loads((self.root / 'consumer/terminal-job.json').read_text()), jobs[-1])
+        self.assertFalse(any(sentinel.encode() in p.read_bytes() for p in self.root.rglob('*') if p.is_file()))
+
+    def test_execution_error_malformed_and_truncated_bodies_are_never_retained(self):
+        import httpx
+        case = self.load()
+        sentinel = 'TEST-ERROR-SIGNED-QUERY-SENTINEL'
+        class BrokenStream(httpx.SyncByteStream):
+            def __iter__(self):
+                yield ('{"artifact_source":{"signed_query":"' + sentinel + '"}').encode()
+                raise httpx.ReadError('Synthetic truncated execution metadata')
+        replies = [lambda: http_reply(503, value={'artifact_source': {'signed_query': sentinel}}),
+                   lambda: http_reply(200, content=('{"artifact_source":{"signed_query":"' + sentinel + '"}').encode()),
+                   lambda: http_reply(200, value={'id': EXECUTION, 'status': 'completed', 'artifact_source': sentinel}),
+                   lambda: httpx.Response(200, stream=BrokenStream())]
+        for index, reply in enumerate(replies):
+            root = self.root / f'invalid-execution-{index}'
+            root.mkdir()
+            with httpx.Client(transport=httpx.MockTransport(lambda request: reply())) as client:
+                wire = cloud.Wire(client, cloud.RouteGuard(case), root)
+                with self.subTest(index=index), self.assertRaises(Exception):
+                    wire.call('GET', '/api/v1/studies/executions/' + EXECUTION)
+            self.assertFalse(list(root.glob('*.response.bin')))
+            metadata = json.loads((root / 'wire-001.response.json').read_text())
+            self.assertTrue(metadata['body_omitted'])
+            self.assertEqual(metadata['retention'], 'execution_metadata_body_omitted')
+            self.assertFalse(any(sentinel.encode() in p.read_bytes() for p in root.iterdir()))
+
+    def test_execution_gzip_wire_hash_and_retained_redacted_hash_are_distinct(self):
+        import httpx
+        case = self.load()
+        job = {'id': EXECUTION, 'status': 'running', 'definition_id': DEFINITION,
+               'artifact_source': {'kind': 'cloudfront', 'signed_query': 'TEST-GZIP-GRANT-SENTINEL'}}
+        raw = json.dumps(job, separators=(',', ':')).encode()
+        encoded = gzip.compress(raw)
+        with httpx.Client(transport=httpx.MockTransport(lambda request: http_reply(
+                200, content=encoded, headers={'content-encoding': 'gzip'}))) as client:
+            actual = cloud.Wire(client, cloud.RouteGuard(case), self.root).call(
+                'GET', '/api/v1/studies/executions/' + EXECUTION)
+        job['artifact_source']['signed_query'] = '[REDACTED]'
+        self.assertEqual(actual, job)
+        metadata = json.loads((self.root / 'wire-001.response.json').read_text())
+        self.assertEqual(metadata['wire_body_sha256'], hashlib.sha256(encoded).hexdigest())
+        retained = (self.root / 'wire-001.response.bin').read_bytes()
+        self.assertEqual(metadata['retained_body_sha256'], hashlib.sha256(retained).hexdigest())
+        self.assertEqual(json.loads(retained), job)
+        self.assertFalse(any(b'TEST-GZIP-GRANT-SENTINEL' in p.read_bytes() for p in self.root.rglob('*') if p.is_file()))
+
+    def test_non_execution_payloads_are_unchanged_by_narrow_grant_policy(self):
+        import httpx
+        case = self.load()
+        raw = b'{"artifact_source":{"signed_query":"ordinary-model-payload"},"fact":42}'
+        path = '/api/v1/studies/executions/' + PRODUCER + '/model-fits/owned'
+        with httpx.Client(transport=httpx.MockTransport(lambda request: http_reply(200, content=raw))) as client:
+            actual = cloud.Wire(client, cloud.RouteGuard(case), self.root).call('GET', path)
+        self.assertEqual(actual, json.loads(raw))
+        self.assertEqual((self.root / 'wire-001.response.bin').read_bytes(), raw)
+        metadata = json.loads((self.root / 'wire-001.response.json').read_text())
+        self.assertEqual(metadata['wire_body_sha256'], metadata['retained_body_sha256'])
+        self.assertEqual(metadata['retention'], 'unmodified_application_body')
+
+    def test_binary_response_table_bytes_remain_unchanged_with_wire_encoding(self):
+        import httpx
+        case = self.load()
+        root = self.root / 'binary'
+        root.mkdir()
+        guard = cloud.RouteGuard(case)
+        guard.completed.add(EXECUTION)
+        ref = {'table': 'bound-table', 'field_ids': ['forecast'], 'row_count': 4}
+        guard.bind_table(EXECUTION, ref)
+        raw = b'BINARY-TRANSPORT-CONTROL\x00\xff\x00'
+        encoded = gzip.compress(raw)
+        body = {'table': ref['table'], 'field_ids': ref['field_ids'], 'offset': 0, 'page_size': 17}
+        with httpx.Client(transport=httpx.MockTransport(lambda request: http_reply(
+                200, content=encoded, headers={'content-encoding': 'gzip'}))) as client:
+            actual = cloud.Wire(client, guard, root).post(
+                '/api/v1/studies/executions/' + EXECUTION + '/response-tables', body, binary=True)
+        self.assertEqual(actual, raw)
+        self.assertEqual((root / 'wire-001.response.bin').read_bytes(), raw)
+        metadata = json.loads((root / 'wire-001.response.json').read_text())
+        self.assertEqual(metadata['wire_body_sha256'], hashlib.sha256(encoded).hexdigest())
+        self.assertEqual(metadata['retained_body_sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(metadata['retention'], 'unmodified_application_body')
 
     def test_unknown_write_outcome_cannot_repeat_the_consumed_write(self):
         import httpx

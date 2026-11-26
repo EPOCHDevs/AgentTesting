@@ -38,6 +38,27 @@ class CaptureError(Exception):
     pass
 
 
+def redact_execution_metadata(value: object) -> dict:
+    """Validate Native GetExecution metadata and remove only its inline CDN grant.
+
+    This is the existing execution.json retention policy, shared with the family
+    harness. It is deliberately not a generic JSON/string redactor.
+    """
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("id"), str)
+        or not isinstance(value.get("status"), str)
+        or value["status"] not in STATUSES
+    ):
+        raise CaptureError("execution response identity or status is invalid")
+    source = value.get("artifact_source")
+    if source is not None and not isinstance(source, dict):
+        raise CaptureError("execution artifact source is invalid")
+    if isinstance(source, dict) and "signed_query" in source:
+        source["signed_query"] = "[REDACTED]"
+    return value
+
+
 async def _json(client, url, headers, path, *, params=None):
     body = bytearray()
     status_code = None
@@ -61,18 +82,7 @@ async def _json(client, url, headers, path, *, params=None):
             raise CaptureError(f"HTTP {status_code}")
         value = json.loads(body)
         if execution_record:
-            if (
-                not isinstance(value, dict)
-                or not isinstance(value.get("id"), str)
-                or not isinstance(value.get("status"), str)
-                or value["status"] not in STATUSES
-            ):
-                raise CaptureError("execution response identity or status is invalid")
-            source = value.get("artifact_source")
-            if source is not None and not isinstance(source, dict):
-                raise CaptureError("execution artifact source is invalid")
-            if isinstance(source, dict) and "signed_query" in source:
-                source["signed_query"] = "[REDACTED]"
+            value = redact_execution_metadata(value)
     except (
         CaptureError,
         httpx.HTTPError,
