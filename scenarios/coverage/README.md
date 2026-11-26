@@ -249,6 +249,9 @@ The tracker does not deploy, mutate fixtures, cancel work or submit research.
 Future human-facing acceptance uses short natural openings and replies, normally
 one or two lines at a time. Let actual questions drive the next reply; keep
 technical contracts, IDs and numeric oracles private unless the real human
-supplied them. Earlier operator-directed diagnostics remain diagnostic evidence,
+supplied them. Do not insert arbitrary portfolio caps or other test thresholds
+into the user's question; those require an established user mandate. Select
+existing resources through ordinary product context where supported.
+Earlier operator-directed diagnostics remain diagnostic evidence,
 not natural-conversation acceptance. Real-user witnesses live separately under
 `../user-witnesses/`; they do not alter a frozen campaign catalogue.
