@@ -194,7 +194,7 @@ class CloudTest(unittest.TestCase):
     def test_real_http_transport_boundary_retains_bytes_before_parsing_and_refuses_redirects(self):
         import httpx
         case = self.load()
-        for status in (200, 302):
+        for status in (200, 201, 202, 302):
             root = self.root / f'wire-{status}'
             root.mkdir()
             def handler(request):
@@ -205,7 +205,7 @@ class CloudTest(unittest.TestCase):
                 if status == 200:
                     self.assertEqual(wire.call('GET', '/health')['git_sha'], case.native_source)
                 else:
-                    with self.assertRaisesRegex(ValueError, 'Non-200'):
+                    with self.assertRaisesRegex(ValueError, 'HTTP status'):
                         wire.call('GET', '/health')
             retained = list(root.iterdir())
             self.assertEqual(len(retained), 3)
@@ -226,11 +226,11 @@ class CloudTest(unittest.TestCase):
             path = request.url.path
             seen.append((request.method, path))
             if path.endswith('/compile-view'): return http_reply(200, value={'nodes': nodes})
-            if path == '/api/v1/studies/definitions': return http_reply(200, value={'id': DEFINITION})
+            if path == '/api/v1/studies/definitions': return http_reply(201, value={'id': DEFINITION})
             if path == '/api/v1/studies/executions':
                 body = json.loads(request.content)
                 self.assertEqual(body, {'id': DEFINITION, 'execution_id': EXECUTION})
-                return http_reply(200, value={'id': EXECUTION})
+                return http_reply(201, value={'id': EXECUTION})
             if path.endswith('/study'):
                 return http_reply(200, value={'execution_id': EXECUTION, 'definition_id': DEFINITION,
                     'study': {'source': source}})
@@ -272,6 +272,40 @@ class CloudTest(unittest.TestCase):
             self.assertEqual(metadata['retention'], 'native_execution_metadata_redacted')
         self.assertEqual(json.loads((self.root / 'consumer/terminal-job.json').read_text()), jobs[-1])
         self.assertFalse(any(sentinel.encode() in p.read_bytes() for p in self.root.rglob('*') if p.is_file()))
+
+    def test_wrong_write_success_status_stops_without_replaying_the_write(self):
+        import httpx
+        case = self.load()
+        source = driver.sources(case)[0]
+        operations = [('/api/v1/script-validator/compile-view',
+                       {'source': source, 'study_assets': [], 'study_type': 'research'}, 200),
+                      ('/api/v1/studies/definitions', {'source': source, 'data': {'assets': []},
+                       'name': 'Owned GARCH temporary',
+                       'description': 'Synthetic owned lifecycle fixture; no vendor inputs.'}, 201),
+                      ('/api/v1/studies/executions', {'id': DEFINITION, 'execution_id': EXECUTION}, 201)]
+        for index, unexpected in enumerate((201, 200, 202)):
+            with self.subTest(operation=index):
+                root = self.root / f'wrong-status-{index}'
+                root.mkdir()
+                guard, forwarded = cloud.RouteGuard(case), []
+                def handler(request):
+                    forwarded.append(str(request.url))
+                    current = len(forwarded) - 1
+                    status = unexpected if current == index else operations[current][2]
+                    return http_reply(status, value={'id': DEFINITION})
+                with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+                    wire = cloud.Wire(client, guard, root)
+                    for path, body, _ in operations[:index]:
+                        wire.post(path, body)
+                        if path.endswith('/definitions'):
+                            guard.definitions[EXECUTION] = DEFINITION
+                    path, body, _ = operations[index]
+                    with self.assertRaisesRegex(ValueError, 'HTTP status'):
+                        wire.post(path, body)
+                    with self.assertRaises(ValueError):
+                        wire.post(path, body)
+                self.assertEqual(len(forwarded), index + 1)
+                self.assertEqual(json.loads((root / f'wire-{index + 1:03d}.response.json').read_text())['status'], unexpected)
 
     def test_execution_error_malformed_and_truncated_bodies_are_never_retained(self):
         import httpx

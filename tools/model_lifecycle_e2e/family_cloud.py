@@ -251,6 +251,16 @@ class RouteGuard:
             raise ValueError('Unadmitted route/method or exhausted read cap')
         self.counts[key] = self.counts.get(key, 0) + 1
 
+    def success_status(self, method: str, url: str) -> int:
+        parsed = urlsplit(url)
+        key = (method, f'{parsed.scheme}://{parsed.netloc}', parsed.path)
+        if key not in self.counts:
+            raise ValueError('A response status requires an admitted request')
+        # Native f9 OpenAPI and SendId register Created for these two writes.
+        # Compile, Arrow reads and the admitted GETs register OK.
+        return 201 if method == 'POST' and parsed.path in {
+            '/api/v1/studies/definitions', '/api/v1/studies/executions'} else 200
+
 
 class Wire:
     def __init__(self, client, guard: RouteGuard, root: Path):
@@ -259,6 +269,7 @@ class Wire:
     def call(self, method: str, path: str, *, origin: str = NATIVE, body=None, query=None, binary=False):
         url = origin + path + ('?' + urlencode(query) if query else '')
         self.guard.check(method, url, body)
+        expected_status = self.guard.success_status(method, url)
         self.sequence += 1
         prefix = self.root / f'wire-{self.sequence:03d}'
         durable(prefix.with_suffix('.request.json'), {'method': method, 'url': url, 'json': body})
@@ -324,8 +335,8 @@ class Wire:
                 output.write(retained); output.flush(); os.fsync(output.fileno())
             durable(prefix.with_suffix('.response.json'), {**metadata,
                 'retained_body_bytes': len(retained), 'retained_body_sha256': hashlib.sha256(retained).hexdigest()})
-            if response.status_code != 200:
-                raise ValueError('Non-200 response stops this attempt; no retries')
+            if response.status_code != expected_status:
+                raise ValueError('Unexpected HTTP status stops this attempt; no retries')
         return retained if binary else value if execution_record else json.loads(retained)
 
     def post(self, path: str, body: dict, *, binary=False):
