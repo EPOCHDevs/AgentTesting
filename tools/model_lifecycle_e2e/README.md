@@ -324,6 +324,29 @@ and retained zero-fit/effect evidence. Observed40-row `*_infer` replay cannot
 stand in for that gate. HMM remains separately qualified by its explicit causal
 versus retrospective operation; no HMM forecast oracle is supplied here.
 
+The v6 HMM execution bound is **two temporary consumers, one saved consumer and
+one post-cleanup consumer**. Only the temporary stage runs the base/suffix causal
+pair. Saved and post-cleanup stages each run the unchanged observed source once
+and compare all40 input/probability rows with the original temporary base result.
+They do not repeat the intervention or replace a missing baseline with a new run.
+
+For those two HMM replay stages, the root-issued case must include three ordinary
+`{path, sha256}` references: `hmm_reference_receipt`, `hmm_reference_answers` and
+`hmm_reference_config`. The receipt must be the accepted temporary pair, with the
+same producer/digest/fit and zero-fit counts. Its first contract witness must match
+the original base config's owner, exact binding, causal mode and capability. The
+answers must contain the complete unchanged40-row fixture. Missing, changed or
+misbound references stop before credential or SDK access; preserve the reference
+files before source cleanup. This is replay equivalence and causal filtering
+evidence, not independent HMM estimation or a future state-forecast oracle.
+
+ARIMA/GARCH stages remain separate empty-input checkpoint forecast executions.
+Each uses all four horizons1/2/5/21 and compares every scalar with the independent
+retained-state oracle. Their observed40-row `*_infer` source cannot satisfy this
+future-forecast gate. Source-only preparation and synthetic codec/math controls
+must remain explicitly unbound until real producer/saved identities, copied bytes,
+runtime and operation admissions exist.
+
 `family_consumers.py` wires the next actual cases, without producing, saving or
 cleaning up a fit. Each invocation is one explicit temporary, saved or
 post-cleanup stage. ARIMA/GARCH use empty-input checkpoint operations at1,2,5,21,

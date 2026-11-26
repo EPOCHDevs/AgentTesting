@@ -1,7 +1,8 @@
 """Explicit, root-admitted local consumers; no producer/Save/cleanup automation.
 
-Run each temporary/saved/post-cleanup forecast case separately. HMM consumes the
-same fit twice with an unchanged five-row prefix and a changed suffix. Unknown
+Run each temporary/saved/post-cleanup forecast case separately. Temporary HMM
+consumes the same fit twice with a shared five-row prefix and changed suffix;
+saved/post-cleanup stages each compare one replay with that original full result. Unknown
 write outcomes stop; existing evidence directories cannot be resubmitted.
 Imports of SDK/network dependencies and the opaque token provider are lazy.
 """
@@ -17,7 +18,7 @@ import math
 from pathlib import Path
 import re
 import struct
-from typing import Callable, Literal, cast
+from typing import Callable, Literal, TypedDict, cast
 from urllib.parse import quote, urlparse
 
 from .families import Family, family_source, synthetic_value
@@ -27,6 +28,19 @@ from .native_artifact import ENVELOPE, MAX_BYTES
 
 TOKEN_PROVIDER_PATH = Path('/home/adesola/EpochDev/EpochAI/tools/cognito_auth.py')
 TOKEN_PROVIDER_SHA256 = '04281614f60473dac30325b23389c165d5ef9fe9282785250fb87170a242a9ed'
+
+@dataclass(frozen=True)
+class HMMReplayReference:
+    answers: Path
+    answers_sha256: str
+    receipt_sha256: str
+    config_sha256: str
+
+
+class HMMAnswer(TypedDict):
+    columns: list[str]
+    rows: list[list[int | float]]
+
 
 @dataclass(frozen=True)
 class Case:
@@ -51,6 +65,7 @@ class Case:
     admission_sha256: str
     root_packet_sha256: str
     producer_witness_sha256: str
+    hmm_reference: HMMReplayReference | None = None
 
 
 def _read(path: Path, limit: int = MAX_BYTES) -> bytes:
@@ -141,6 +156,16 @@ def load_case(path: Path, expected_sha256: str) -> Case:
                 or cleanup.get('producer_execution_id') != value['producer_execution_id']
                 or cleanup.get('digest') != value['digest']):
             raise ValueError('Post-cleanup requires actual scoped supported cleanup evidence')
+    saved_ref = value.get('saved_model_ref')
+    if saved and (not isinstance(saved_ref, str) or not re.fullmatch(r'model_[a-f0-9]{64}', saved_ref)):
+        raise ValueError('Saved consumers require the exact saved model reference')
+    if not saved and saved_ref is not None:
+        raise ValueError('Temporary consumers cannot use a saved model reference')
+    hmm_reference = None
+    if family == 'HMM' and saved:
+        hmm_reference = load_hmm_reference(value, owner=value['owner_user_id'],
+            producer=value['producer_execution_id'], fit_name=value['fit_name'],
+            digest=value['digest'], fit_cutoff=value['fit_cutoff'])
     artifact = Path(value['artifact_path'])
     data = _read(artifact)
     if 'sha256:' + hashlib.sha256(data).hexdigest() != value['digest'] or not data.startswith(ENVELOPE):
@@ -169,16 +194,18 @@ def load_case(path: Path, expected_sha256: str) -> Case:
                 value['producer_config_sha256'], value['producer_source_sha256'],
                 value['fit_cutoff'], artifact,
                 value['saved_model_ref'] if saved else value['fit_name'], manifest,
-                provider, value['token_provider_sha256'], expected_sha256, runtime_sha, producer_sha)
+                provider, value['token_provider_sha256'], expected_sha256, runtime_sha, producer_sha,
+                hmm_reference)
 
 
 def sources(case: Case) -> tuple[str, ...]:
     origin = {'manifest_sha256': case.manifest_sha256} if case.manifest_sha256 else {
         'producer_execution': case.producer}
     if case.family == 'HMM':
-        return (family_source('HMM', model_ref=case.model_ref, **origin),
-                family_source('HMM', model_ref=case.model_ref,
-                              changed_observed_suffix=True, **origin))
+        base = family_source('HMM', model_ref=case.model_ref, **origin)
+        return ((base, family_source('HMM', model_ref=case.model_ref,
+                                    changed_observed_suffix=True, **origin))
+                if case.stage == 'temporary' else (base,))
     return (forecast_source(case.family, model_ref=case.model_ref, **origin),)
 
 
@@ -215,6 +242,71 @@ def compare_forecasts(case: Case, result: dict) -> list[dict]:
     return checked
 
 
+def validate_hmm_table(value: object, *, changed_suffix: bool = False) -> HMMAnswer:
+    if (not isinstance(value, dict) or set(value) != {'columns', 'rows'}
+            or value['columns'] != ['coordinate', 'observed', 'p0', 'p1']
+            or not isinstance(value['rows'], list) or len(value['rows']) != 40):
+        raise AssertionError('HMM output changed its complete declared shape')
+    for index, row in enumerate(value['rows']):
+        if not isinstance(row, list) or len(row) != 4:
+            raise AssertionError('HMM output changed its complete declared row shape')
+        coordinate = int((datetime(2022, 1, 1, tzinfo=timezone.utc)
+            + timedelta(days=160 + index)).timestamp()) * 1_000_000_000
+        if type(row[0]) is not int or row[0] != coordinate:
+            raise AssertionError('HMM observed coordinate differs from the exact UTC-ns fixture grid')
+        expected = synthetic_value(160 + index) * (-1 if changed_suffix and index >= 5 else 1)
+        observed, p0, p1 = row[1:]
+        if (any(type(x) not in (int, float) or not math.isfinite(x) for x in (observed, p0, p1))
+                or not math.isclose(observed, expected, rel_tol=0, abs_tol=1e-14)
+                or not 0 <= p0 <= 1 or not 0 <= p1 <= 1
+                or not math.isclose(p0 + p1, 1, rel_tol=0, abs_tol=1e-12)):
+            raise AssertionError('Invalid HMM filtered probability output')
+    return cast(HMMAnswer, value)
+
+
+def compare_hmm_replay(reference: object, actual: object) -> None:
+    before, after = validate_hmm_table(reference), validate_hmm_table(actual)
+    for first, second in zip(before['rows'], after['rows']):
+        if first[:2] != second[:2] or any(not math.isclose(a, b, rel_tol=0, abs_tol=1e-12)
+                                       for a, b in zip(first[2:], second[2:])):
+            raise AssertionError('Saved HMM replay changed a row from its original temporary result')
+
+
+def load_hmm_reference(value: dict, *, owner: str, producer: str, fit_name: str,
+                       digest: str, fit_cutoff: str) -> HMMReplayReference:
+    keys = ('hmm_reference_receipt', 'hmm_reference_answers', 'hmm_reference_config')
+    if any(key not in value for key in keys):
+        raise ValueError('Saved HMM requires the original temporary base receipt, answers and config')
+    receipt_body, receipt_sha = _reference(value[keys[0]])
+    answers_body, answers_sha = _reference(value[keys[1]])
+    _, config_sha = _reference(value[keys[2]])
+    receipt = json.loads(receipt_body)
+    if (receipt.get('status') != 'passed' or receipt.get('family') != 'HMM'
+            or receipt.get('stage') != 'temporary' or receipt.get('digest') != digest
+            or receipt.get('producer') != producer or receipt.get('model_ref') != fit_name
+            or receipt.get('manifest_sha256') is not None
+            or len(receipt.get('executions', [])) != 2
+            or receipt.get('fit_operations_per_consumer') != [0, 0]
+            or receipt.get('numeric') != {'causal_prefix_rows': 5, 'observed_rows_per_consumer': 40}):
+        raise ValueError('HMM reference is not the accepted temporary causal pair')
+    witness = retained_contract(Path(value[keys[2]]['path']), family='HMM', digest=digest,
+        owner=owner, producer=producer, fit_cutoff=fit_cutoff, manifest_sha256=None, model_ref=fit_name)
+    if (witness.config_sha256 != config_sha or len(receipt.get('contract_witnesses', [])) != 2
+            or receipt['contract_witnesses'][0] != json.loads(json.dumps(asdict(witness)))):
+        raise ValueError('HMM reference config differs from the original base contract witness')
+    validate_hmm_table(json.loads(answers_body))
+    return HMMReplayReference(Path(value[keys[1]]['path']), answers_sha, receipt_sha, config_sha)
+
+
+def read_hmm_reference(reference: HMMReplayReference | None) -> HMMAnswer:
+    if reference is None:
+        raise ValueError('Saved HMM requires its admitted original temporary result')
+    body = _read(reference.answers)
+    if hashlib.sha256(body).hexdigest() != reference.answers_sha256:
+        raise ValueError('HMM reference answer bytes changed')
+    return validate_hmm_table(json.loads(body))
+
+
 def compare_hmm_prefix(base: dict, changed: dict) -> None:
     if base['columns'] != ['coordinate', 'observed', 'p0', 'p1'] or changed['columns'] != base['columns']:
         raise AssertionError('HMM causal control changed its declared columns')
@@ -238,6 +330,8 @@ def compare_hmm_prefix(base: dict, changed: dict) -> None:
                     or not 0 <= p0 <= 1 or not 0 <= p1 <= 1
                     or not math.isclose(p0 + p1, 1, rel_tol=0, abs_tol=1e-12)):
                 raise AssertionError('Invalid HMM filtered probability output')
+    validate_hmm_table(base)
+    validate_hmm_table(changed, changed_suffix=True)
 
 
 def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
@@ -246,6 +340,8 @@ def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
         raise ValueError('Use an explicit absolute new evidence directory')
     if evidence.exists():
         raise FileExistsError('An existing attempt must not be resubmitted')
+    hmm_base = (read_hmm_reference(case.hmm_reference)
+                if case.family == 'HMM' and case.stage != 'temporary' else None)
     token = token_provider()  # Opaque credential; no JWT/profile/cache inspection.
     if not isinstance(token, str) or not token:
         raise ValueError('The maintained token provider returned no opaque credential')
@@ -263,6 +359,8 @@ def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
     serialized_case = asdict(case)
     for key in ('native_root', 'artifact', 'provider_file'):
         serialized_case[key] = str(serialized_case[key])
+    if case.hmm_reference is not None:
+        serialized_case['hmm_reference']['answers'] = str(case.hmm_reference.answers)
     write(evidence / 'before-write-intent.json', {
         'case': serialized_case, 'source_sha256': [hashlib.sha256(x.encode()).hexdigest() for x in prepared],
         'expected_new_fits': 0, 'expected_consumer_executions': len(prepared),
@@ -328,8 +426,14 @@ def run(case: Case, evidence: Path, token_provider: Callable[[], str | None],
             write(stage / 'answers.json', answer)
             answers.append(answer)
         if case.family == 'HMM':
-            compare_hmm_prefix(*answers)
-            numeric = {'causal_prefix_rows': 5, 'observed_rows_per_consumer': 40}
+            if case.stage == 'temporary':
+                compare_hmm_prefix(*answers)
+                numeric = {'causal_prefix_rows': 5, 'observed_rows_per_consumer': 40}
+            else:
+                if len(answers) != 1:
+                    raise AssertionError('Saved HMM stage exceeded its one-consumer bound')
+                compare_hmm_replay(hmm_base, answers[0])
+                numeric = {'observed_rows_per_consumer': 40, 'same_as_temporary_base': True}
         else:
             numeric = {'independent_horizon_oracles': compare_forecasts(case, answers[0])}
         write(evidence / 'receipt.json', {'status': 'passed', 'family': case.family, 'stage': case.stage,
