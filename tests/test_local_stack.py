@@ -15,6 +15,24 @@ from tools import agent_testing, local_auth, local_stack
 from tools.agent_testing import Stack
 
 
+def test_normal_startup_waits_for_async_ai_references_without_weakening_readiness(monkeypatch):
+    calls = []
+    async def check(stack, bearer):
+        calls.append(bearer)
+        if len(calls) == 1:
+            raise RuntimeError(f"{stack.environment} AI is not ready; inspect its /health/custom response.")
+        return {"ai": {"build_study": {"ready": True}}}
+    monkeypatch.setattr(local_stack, "check_stack", check)
+    stack = SimpleNamespace(environment="local")
+    assert asyncio.run(local_stack.wait_stack_ready(stack, "opaque-test-token", [], timeout=1))["ai"]["build_study"]["ready"]
+    assert len(calls) == 2
+    async def wrong_origin(_stack, _bearer):
+        raise RuntimeError("AI reports a different Backend")
+    monkeypatch.setattr(local_stack, "check_stack", wrong_origin)
+    with pytest.raises(RuntimeError, match="different Backend"):
+        asyncio.run(local_stack.wait_stack_ready(stack, "opaque-test-token", []))
+
+
 def test_local_profiles_only():
     assert local_stack.local_ports(Stack.load(Path("environments.toml"), "local")) == [
         9000,

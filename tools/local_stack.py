@@ -1139,6 +1139,22 @@ def portal_environment(base: dict[str, str], stack: Stack) -> dict[str, str]:
             "VITE_COGNITO_USER_POOL_ID": POOL, "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT}
 
 
+async def wait_stack_ready(stack: Stack, bearer: str, children: list, timeout: float = 30) -> dict:
+    """Keep the normal readiness gate closed while AI's async references warm."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if any(child.poll() is not None for child in children):
+            raise ValueError("A service exited during startup. Inspect its local log.")
+        try:
+            return await check_stack(stack, bearer)
+        except RuntimeError as error:
+            # Only the existing not-yet-ready state is retried. Authentication,
+            # wrong origins, source mismatches and transport errors still fail.
+            if str(error) != f"{stack.environment} AI is not ready; inspect its /health/custom response." or time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(min(0.25, max(0, deadline - time.monotonic())))
+
+
 def wait_ready(url: str, children: list, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     with httpx.Client(timeout=2, trust_env=False) as http:
@@ -1307,7 +1323,7 @@ def main() -> None:
                 # The up server imports the graphs inside its container first.
                 up_agent = name == "AI" and args.ai_runtime == "up"
                 wait_ready(url, children, 420 if up_agent else 180)
-            receipt = asyncio.run(check_stack(stack, "Bearer " + bearer))
+            receipt = asyncio.run(wait_stack_ready(stack, "Bearer " + bearer, children))
             if retained is not None:
                 actual_ai = receipt.get("ai")
                 if (not isinstance(actual_ai, dict) or not isinstance(actual_ai.get("deployment"), dict)
