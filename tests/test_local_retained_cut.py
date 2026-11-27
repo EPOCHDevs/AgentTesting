@@ -226,11 +226,13 @@ def test_retained_mode_explicitly_disables_ui_refresh_before_request_write(tmp_p
     assert not (tmp_path / refresh.REQUEST).exists()
 
 
-def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure_phase", ["startup", "after-ready"])
+def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_path, monkeypatch, failure_phase):
     f = reviewed_cut
     state = tmp_path / "launcher-state"
     state.mkdir()
     children, stopped, commands = [], [], []
+    readiness = {"checked": False}
     names = ["Backend", "Platform", "FrontDoor", "AI", "UI"]
     services = [(name, [name], tmp_path, {}, "http://localhost:1") for name in names]
     monkeypatch.setattr(sys, "argv", ["local_stack", "--ai-runtime", "up", "--ui-runtime", "build",
@@ -246,6 +248,7 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     monkeypatch.setattr(local_stack, "cached_token", lambda **_: "fixture")
     monkeypatch.setattr(local_stack, "wait_ready", lambda *_: None)
     async def health(*_args):
+        readiness["checked"] = True
         return {"ai": {"deployment": {"git_sha": f.cut.runtime_sources["EpochAI"]},
                        "reference_version": f.cut.native_reference_version}}
     monkeypatch.setattr(local_stack, "check_stack", health)
@@ -253,7 +256,8 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
         "index_sha256": f.cut.ui_files["index.html"],
         "entry_assets": {"/assets/main.js": f.cut.ui_files["assets/main.js"]}})
     def spawn(command, **_kwargs):
-        child = SimpleNamespace(pid=100 + len(children), poll=lambda: 1 if command == ["UI"] else None)
+        child = SimpleNamespace(pid=100 + len(children), poll=lambda: 1 if command == ["UI"] and
+                                (failure_phase == "startup" or readiness["checked"]) else None)
         children.append(child)
         return child
     monkeypatch.setattr(local_stack.subprocess, "Popen", spawn)
@@ -267,8 +271,12 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     assert stopped == children and len(stopped) == 5
     assert len(commands) == 1 and commands[0][:2] == ["docker", "compose"]
     assert not (state / refresh.CAPABILITY).exists()
-    receipt = json.loads((state / "health.json").read_text())
-    assert receipt["retained_runtime_cut"]["runtime_sources"] == f.cut.runtime_sources
+    if failure_phase == "startup":
+        assert not readiness["checked"]
+        assert not (state / "health.json").exists()
+    else:
+        receipt = json.loads((state / "health.json").read_text())
+        assert receipt["retained_runtime_cut"]["runtime_sources"] == f.cut.runtime_sources
 
 
 def test_preflight_failure_never_composes_down_an_existing_stack(tmp_path, monkeypatch):

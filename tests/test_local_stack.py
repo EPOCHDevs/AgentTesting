@@ -15,6 +15,24 @@ from tools import agent_testing, local_auth, local_stack
 from tools.agent_testing import Stack
 
 
+def test_normal_startup_waits_for_async_ai_references_without_weakening_readiness(monkeypatch):
+    calls = []
+    async def check(stack, bearer):
+        calls.append(bearer)
+        if len(calls) == 1:
+            raise RuntimeError(f"{stack.environment} AI is not ready; inspect its /health/custom response.")
+        return {"ai": {"build_study": {"ready": True}}}
+    monkeypatch.setattr(local_stack, "check_stack", check)
+    stack = SimpleNamespace(environment="local")
+    assert asyncio.run(local_stack.wait_stack_ready(stack, "opaque-test-token", [], timeout=1))["ai"]["build_study"]["ready"]
+    assert len(calls) == 2
+    async def wrong_origin(_stack, _bearer):
+        raise RuntimeError("AI reports a different Backend")
+    monkeypatch.setattr(local_stack, "check_stack", wrong_origin)
+    with pytest.raises(RuntimeError, match="different Backend"):
+        asyncio.run(local_stack.wait_stack_ready(stack, "opaque-test-token", []))
+
+
 def test_local_profiles_only():
     assert local_stack.local_ports(Stack.load(Path("environments.toml"), "local")) == [
         9000,
@@ -67,6 +85,7 @@ def test_platform_study_origins_are_local_and_cannot_inherit_cloud_run_storage(t
     assert env["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
     assert env["EPOCH_STUDY_AGENT_ORIGIN"] == "http://localhost:2024"
     assert env["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    assert env["EPOCH_PRESENTATIONS_ENABLED"] == "true"
     for key in ["EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL", "AWS_PROFILE"]:
         assert key not in env
     for origin in [None, "https://agent.example", "http://user:password@localhost:2024", "http://localhost:2024/foreign"]:
