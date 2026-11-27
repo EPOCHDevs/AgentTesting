@@ -720,6 +720,8 @@ def prepare_platform(
     # No AWS credentials reach it: local Files must never fall back to a cloud store.
     env = {key: value for key, value in base.items() if not key.startswith("AWS_")}
     for key in ("EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL",
+                "EPOCH_PRESENTATIONS_BUCKET", "EPOCH_PRESENTATIONS_CDN_DOMAIN",
+                "EPOCH_PRESENTATIONS_CDN_KEY_PAIR_ID", "EPOCH_PRESENTATIONS_CDN_PRIVATE_KEY",
                 "EPOCH_STUDY_NATIVE_ORIGIN", "EPOCH_STUDY_AGENT_ORIGIN",
                 "EPOCH_STUDY_NATIVE_PERSONAL_ROOT", STUDY_PEER_TOKEN):
         env.pop(key, None)
@@ -748,6 +750,9 @@ def prepare_platform(
         env.update({"EPOCH_STUDY_NATIVE_ORIGIN": f"http://127.0.0.1:{BACKEND_PORT}",
                     "EPOCH_STUDY_AGENT_ORIGIN": study_agent_origin or "",
                     "EPOCH_STUDY_NATIVE_PERSONAL_ROOT": str(project / "personal_content")})
+        # The normal LOCAL presentation adapter uses Platform's filesystem
+        # storage and Native's authenticated local API, without cloud storage.
+        env["EPOCH_PRESENTATIONS_ENABLED"] = "true"
     # GDS is a shared catalogue service in deployed stacks too. Read only its
     # explicit connection settings; local Files and observation reads stay local.
     settings = platform / ".env.local"

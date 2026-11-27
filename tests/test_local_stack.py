@@ -67,6 +67,7 @@ def test_platform_study_origins_are_local_and_cannot_inherit_cloud_run_storage(t
     assert env["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
     assert env["EPOCH_STUDY_AGENT_ORIGIN"] == "http://localhost:2024"
     assert env["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == env["EPOCH_FILES_LOCAL_ROOT"] == str(tmp_path / "project/personal_content")
+    assert env["EPOCH_PRESENTATIONS_ENABLED"] == "true"
     for key in ["EPOCH_RUN_STORE_BUCKET", "EPOCH_RUN_STORE_INDEX_TABLE", "EPOCH_RUN_STORE_URL", "AWS_PROFILE"]:
         assert key not in env
     for origin in [None, "https://agent.example", "http://user:password@localhost:2024", "http://localhost:2024/foreign"]:
