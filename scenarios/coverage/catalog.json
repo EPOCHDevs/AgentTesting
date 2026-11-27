@@ -891,7 +891,7 @@
       "agent_id": "journey-research",
       "title": "Respect macro information timing",
       "journey": "Compare the selected inflation surprise with the agreed market response using only information available at that point.",
-      "acceptance": "Exact series/event IDs, units, release versus observation/vintage clocks, checkpoints, source gaps and aligned samples. Revisions and unavailable exact bars remain explicit; no nearest-bar or news chronology substitution.",
+      "acceptance": "Exact series/event IDs, units, release versus observation/vintage clocks, checkpoints, source gaps and aligned samples. Revisions and unavailable exact bars remain explicit; no nearest-bar or news chronology substitution. Include the recorded CPI five-futures regression and its saved first-hour path continuation (../user-witnesses/cpi-futures-paths-20261127.json); reconcile every eligible and excluded release with its reason. Verify narrative claims separately for absolute magnitude and surprise sensitivity, and keep sensitivity analyses distinct from the original specification.",
       "patterns": [
         "identity",
         "discovery"
@@ -1052,7 +1052,7 @@
       "agent_id": "journey-research",
       "title": "Cross a futures contract boundary",
       "journey": "Test the agreed futures rule across a real contract transition and explain the roll effect.",
-      "acceptance": "Dated versus continuous prices, adjustment, real leg prices, multipliers/ticks, expiry, roll convention and account effects. Missing legs, zero/negative prices and path assumptions retain explicit handling; unsupported mechanics are not fabricated.",
+      "acceptance": "Dated versus continuous prices, adjustment, real leg prices, multipliers/ticks, expiry, roll convention and account effects. Missing legs, zero/negative prices and path assumptions retain explicit handling; unsupported mechanics are not fabricated. Include the CPI witness in ../user-witnesses/cpi-futures-paths-20261127.json: ambiguous daily roll schedules must not be silently replaced by a different contract rule, and delivery-month coverage must be audited.",
       "patterns": [
         "identity",
         "options"
