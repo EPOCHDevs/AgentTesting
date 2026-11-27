@@ -237,6 +237,10 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(state / "backend/personal_content")
     assert files[3]["EPOCH_DEFINITIONS_LOCAL_ROOT"] == str(state / "backend/definitions")
     assert files[3]["EPOCH_REFERENCE_LOCAL_ROOT"] == str(tmp_path / "native-reference")
+    # Research reads the engine's own records directly; it gets no Backend origin or credential for it.
+    assert files[3]["EPOCH_RESEARCH_LOCAL_ROOT"] == str(state / "backend/sdk_requests")
+    assert files[3]["EPOCH_RESEARCH_NATIVE_ROOT"] == str(state / "backend")
+    assert "EPOCH_RESEARCH_NATIVE_URL" not in files[3] and "EPOCH_RESEARCH_OPERATIONS_TOKEN" not in files[3]
     assert files[3]["EPOCH_DISCOVERY_GDS_URL"] == "https://gds.example"
     assert files[3]["EPOCH_DISCOVERY_SERVICE_TOKEN"] == "discovery-credential"
     assert files[3]["EPOCH_DISCOVERY_NATIVE_URL"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"

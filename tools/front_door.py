@@ -26,6 +26,10 @@ PLATFORM_PATHS = (
     "/api/v1/space*",
     "/api/v1/models",
     "/api/v1/models/*",
+    # PLATFORM_RESEARCH_PATHS: Platform owns the research lifecycle; native
+    # execution requests stay on Backend under /api/v1/integration/execution-requests.
+    "/api/v1/integration/requests",
+    "/api/v1/integration/requests/*",
     # PLATFORM_EARLY_PRESENTATION_PATHS; other execution context reads stay Native.
     "/api/v1/contexts/executions/*/presentation/delivery",
     "/api/v1/contexts/temporary-artifacts/*/*",
