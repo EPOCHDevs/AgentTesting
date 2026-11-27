@@ -989,9 +989,9 @@
       "family": "RE",
       "phase": "P1",
       "agent_id": "journey-research",
-      "title": "Compare feasible portfolio allocations",
-      "journey": "Assess the agreed diversification proposal under my concentration limits and compare it with equal weights.",
-      "acceptance": "Actual eligible holdings/as-of, return/currency basis, covariance and constraints; compare target and realized weights, costs/cash and risk. Singular or infeasible inputs fail visibly; no silent constraint removal or bond-strategy substitution.",
+      "title": "Compare my saved portfolios",
+      "journey": "Compare my two portfolios. Which performed better, and which was riskier?",
+      "acceptance": "Use the exact user-selected saved portfolios and their as-run periods, currency, return basis, costs and cash. Independently check supported return, drawdown and risk comparisons. Keep technical identities, digests, row checks and conservation checks in the test assertions. Ask about concentration only as a natural follow-up; apply a numerical cap only when the user has established that mandate. Missing per-holding close marks remain explicit limits, not an invented clean bill of health. Do not silently rerun portfolios or substitute another allocation.",
       "patterns": [
         "options",
         "plan"
@@ -1009,11 +1009,11 @@
         "G02",
         "G04",
         "G05",
-        "G07",
         "G08",
+        "G09",
         "U03",
-        "U04",
         "U08",
+        "U09",
         "C03",
         "C09"
       ]
