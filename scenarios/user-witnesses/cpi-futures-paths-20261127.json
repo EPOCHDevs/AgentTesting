@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "mode": "natural_conversation_acceptance",
+  "case_ids": [
+    "RE03",
+    "RE07"
+  ],
+  "issues": [
+    "ENG-3261",
+    "ENG-3262",
+    "ENG-3263"
+  ],
+  "witness": {
+    "name": "CPI futures reaction and saved first-hour path follow-up",
+    "thread_id": "01a21cb4-ccfd-7603-a597-a7b52da0a42b",
+    "opening_message": "When CPI surprises, how hard do bonds and stocks move in the next hour, did that change during the 2021 to 2023 inflation surge, and is it still true today?",
+    "recorded_choices": [
+      "2017–2020, 2021–2023, and 2024 to latest",
+      "U.S. headline CPI, month over month",
+      "2Y 5Y 10Y 30Y Futures and S&P 500 Futures",
+      "By surprise, Size, Path, Events"
+    ],
+    "follow_up": "Explain how stocks and Treasury futures moved through the first hour after CPI releases in each period, using the saved study’s path results and noting the available coverage.",
+    "initial_failed_execution": "2168bd9e-3a8d-4261-87a9-b482041ae591",
+    "recovered_execution": "75219317-26a3-4340-a30f-d8eb0afe780d",
+    "original_outcome": "First attempt failed loading the ZB daily contract schedule. Recovery changed ZB to nearest-expiry and completed; the saved-path follow-up then had no declared input tables and did not inspect five-minute path values.",
+    "registration": "Regression witness for future RE03/RE07 campaigns; frozen historical catalogues and grades stay unchanged."
+  },
+  "private_oracle": {
+    "data_contract": [
+      "Preserve all five selected markets, period and release/price clocks.",
+      "Keep one authoritative row per daily continuation timestamp; reject genuine conflicting source records without an authorized resolution rule.",
+      "Prove the failure cause with raw source/cache evidence before changing loader behavior.",
+      "Do not silently change the ZB roll methodology to obtain success."
+    ],
+    "saved_path_contract": [
+      "The primary Chat study publishes its requested dashboard.",
+      "Retain only explicitly declared, meaningful result relations needed for subsequent analysis; no raw grid or private chart-backing escape.",
+      "Follow-up reads the same pinned saved path and coverage inputs, reports actual five-minute movement and coverage, and causes zero primary-study reruns or source reacquisitions.",
+      "An existing study with no eligible saved inputs yields a precise limitation, not an invented path or a summary presented as path analysis."
+    ],
+    "evidence": [
+      "Original source and exact revision/IDs, raw failures, repaired source diff and effective acquisition window.",
+      "Actual LOCAL original/repaired execution receipts; separate captured-source replay from fresh agent authoring.",
+      "Full saved-input catalogue and relevant Arrow rows, numerical path oracle, follow-up transcript and native execution/admission counts.",
+      "Measured coverage for all three eras, direction groups and all five markets; source gaps remain explicit."
+    ],
+    "evidence_quality": [
+      "Reconcile all eligible releases and every exclusion by market, exact clock and contract continuity; audit delivery-month concentration.",
+      "Keep mean absolute move, signed group means and surprise-regression slope distinct in the summary.",
+      "Show sample size and distribution sensitivity; leave-one-out and core-CPI analyses remain labelled alternatives.",
+      "Current-calendar actuals/consensus do not establish original first-print vintages.",
+      "External paper/duration comparisons require their actual source and explicit assumptions."
+    ]
+  },
+  "execution_policy": {
+    "environment": "LOCAL",
+    "dev_business_runs": 0,
+    "initial_capture_replay": "Use exact recorded source and choices. Label diagnostic minimizations separately.",
+    "fresh_conversation": "Ask the opening naturally; apply recorded answers only to matching actual clarification questions. Stop for a genuinely new user choice.",
+    "state": "registered; local rerun pending"
+  },
+  "owner_reported_leads": {
+    "verification": "Reported numbers preserved below. See separate verified baseline; these are not target values for a repaired cohort.",
+    "release_counts": [
+      33,
+      25,
+      23
+    ],
+    "retained_releases": 81,
+    "reported_total_releases": 119,
+    "delivery_month_retained": 4,
+    "reported_delivery_month_total": 39,
+    "SP500_slope_per_pp": [
+      -111,
+      -382,
+      -204
+    ],
+    "surge_slope_without_2021_05_12": -576
+  },
+  "verified_baseline": {
+    "saved_execution": "75219317-26a3-4340-a30f-d8eb0afe780d",
+    "retained_events": 81,
+    "era_counts": [
+      33,
+      25,
+      23
+    ],
+    "retained_delivery_month_events": 4,
+    "current_local_calendar": {
+      "raw_rows": 119,
+      "eligible_rows": 117,
+      "missing_from_saved_result": 36,
+      "eligible_delivery_month_rows": 38,
+      "missing_eligible_delivery_month_rows": 34,
+      "null_actual_dates": [
+        "2025-11-13",
+        "2025-12-18"
+      ]
+    },
+    "scope": "The current LOCAL calendar agrees with all81 saved event timestamps and actual/consensus values; it does not establish the original DEV source snapshot or first-print vintages.",
+    "narrative": "Mean absolute moves fall after the surge for allfour Treasury futures. Sensitivity magnitudes rise forZT,ZN,ZB andfall forZF; these are differentmetrics.",
+    "not_a_new_result_target": true
+  }
+}
