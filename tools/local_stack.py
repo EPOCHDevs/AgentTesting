@@ -43,6 +43,12 @@ PROJECT_BRANCHES = {
 # balancer: Backend, and Epoch Platform's general service for Files and Space.
 BACKEND_PORT = 9010
 PLATFORM_PORT = 9020
+IDENTITY_PORT = 9021
+TOKEN_SERVICE_CREDENTIAL = "EPOCH_TOKEN_SERVICE_TOKEN"
+IDENTITY_ONLY_SETTINGS = (
+    "EPOCH_TOKEN_SIGNING_KEYS", "EPOCH_TOKEN_SIGNING_KEYS_PARAMETER",
+    "EPOCH_API_KEYS_TABLE", "EPOCH_SIGN_IN_TABLE", "EPOCH_PLATFORM_SERVICE_HOST",
+)
 FRONT_DOOR = Path(__file__).resolve().parent / "front_door.py"
 
 
@@ -353,7 +359,9 @@ def up_container_env(values: dict[str, str]) -> tuple[dict[str, str], list[str],
     web recovery journal to mount writable."""
     env = dict(values)
     # The document and web workers stay on their loopback origin; a relay serves it.
-    for key in ("EPOCH_BACKEND_URL", "EPOCH_CAMPAIGN_SERVER"):
+    for key in ("EPOCH_BACKEND_URL", "EPOCH_CAMPAIGN_SERVER", "EPOCH_PLATFORM_SERVER", "EPOCH_PLATFORM_SERVICE_URL"):
+        if key not in env:
+            continue
         parts = urlsplit(env[key])
         env[key] = parts._replace(netloc=f"{CONTAINER_HOST}:{parts.port}").geturl()
     for key in ("EPOCH_AI_URL", "LANGGRAPH_API_URL"):
@@ -723,7 +731,8 @@ def prepare_platform(
                 "EPOCH_PRESENTATIONS_BUCKET", "EPOCH_PRESENTATIONS_CDN_DOMAIN",
                 "EPOCH_PRESENTATIONS_CDN_KEY_PAIR_ID", "EPOCH_PRESENTATIONS_CDN_PRIVATE_KEY",
                 "EPOCH_STUDY_NATIVE_ORIGIN", "EPOCH_STUDY_AGENT_ORIGIN",
-                "EPOCH_STUDY_NATIVE_PERSONAL_ROOT", STUDY_PEER_TOKEN):
+                "EPOCH_STUDY_NATIVE_PERSONAL_ROOT", STUDY_PEER_TOKEN,
+                TOKEN_SERVICE_CREDENTIAL, *IDENTITY_ONLY_SETTINGS):
         env.pop(key, None)
     env.update({
         "AWS_CONFIG_FILE": os.devnull,
@@ -797,6 +806,88 @@ def prepare_platform(
     )
 
 
+def prepare_platform_identity(
+    platform: Path, node: str, base: dict[str, str], backend_values: dict[str, str],
+    ai_values: dict[str, str], commit: str, ai_runtime: str,
+) -> tuple:
+    """Use the real identity role and the existing Native authority, without cloud stores.
+
+    Public exchange/JWKS routes stay on Native. Identity signs delegated tokens
+    with those same keys; its absent key/grant stores retain their normal 503s.
+    """
+    required = ("EPOCH_TOKEN_ISSUER", "EPOCH_TOKEN_SIGNING_KEYS", TOKEN_SERVICE_CREDENTIAL)
+    if any(not backend_values.get(key, "").strip() for key in required):
+        raise ValueError("Local Platform identity requires Backend's existing token issuer, signing keys and service credential.")
+    issuer = backend_values["EPOCH_TOKEN_ISSUER"].strip()
+    supplied_issuer = ai_values.get("EPOCH_TOKEN_ISSUER", "").strip()
+    if supplied_issuer and supplied_issuer != issuer:
+        raise ValueError("AI and Native token issuers must agree for local Platform identity.")
+    credential = backend_values[TOKEN_SERVICE_CREDENTIAL].strip()
+    if ai_values.get(TOKEN_SERVICE_CREDENTIAL, "").strip() != credential:
+        raise ValueError("AI and Native must supply the same existing token service credential.")
+    if ai_runtime not in {"dev", "up"}:
+        raise ValueError("Local Platform identity requires a supported AI runtime.")
+    # This is the hostname the real request uses, including from langgraph up.
+    service_host = CONTAINER_HOST if ai_runtime == "up" else "127.0.0.1"
+    env = {key: value for key, value in base.items() if key in {
+        "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "LD_LIBRARY_PATH",
+    }}
+    env.update({
+        "EPOCH_PLATFORM_ROLE": "identity", "EPOCH_ENVIRONMENT": "local",
+        "EPOCH_PLATFORM_REVISION": commit, "PORT": str(IDENTITY_PORT),
+        "EPOCH_PLATFORM_SERVICE_HOST": service_host,
+        "EPOCH_TOKEN_ISSUER": issuer,
+        "EPOCH_TOKEN_SIGNING_KEYS": backend_values["EPOCH_TOKEN_SIGNING_KEYS"],
+        TOKEN_SERVICE_CREDENTIAL: credential,
+        "COGNITO_USER_POOL_ID": POOL, "COGNITO_CLIENT_IDS": f"{CLIENT},{CLI_CLIENT}",
+        "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+        "AWS_EC2_METADATA_DISABLED": "true", "AWS_REGION": REGION,
+    })
+    if backend_values.get("EPOCH_TOKEN_DELEGATED_TTL_SECONDS"):
+        env["EPOCH_TOKEN_DELEGATED_TTL_SECONDS"] = backend_values["EPOCH_TOKEN_DELEGATED_TTL_SECONDS"]
+    return ("PlatformIdentity", [node, "apps/platform/dist/main.js"], platform, env,
+            f"http://127.0.0.1:{IDENTITY_PORT}/health")
+
+
+def verify_platform_identity(service: tuple) -> dict:
+    """Confirm the role/source and real signing keys before starting its consumer.
+
+    The public JWKS uses a different natural loopback hostname from the internal
+    service origin. No Host override or service credential is used by readiness.
+    """
+    _name, _command, _cwd, env, health = service
+    with httpx.Client(timeout=5, trust_env=False, follow_redirects=False) as client:
+        def read(url: str) -> dict:
+            response = client.get(url)
+            if response.status_code != 200:
+                raise ValueError("Local Platform identity signing readiness is unavailable.")
+            return response.json()
+        identity = read(health)
+        expected = {"status": "ok", "service": "epoch-platform", "role": "identity",
+                    "revision": env["EPOCH_PLATFORM_REVISION"]}
+        if identity != expected:
+            raise ValueError("Local Platform identity reports a different role or source.")
+        keys = read(f"http://localhost:{IDENTITY_PORT}/api/v1/auth/jwks")
+        native = read(f"http://127.0.0.1:{BACKEND_PORT}/api/v1/auth/jwks")
+    def roster(value: dict) -> dict:
+        if set(value) != {"keys"} or not isinstance(value["keys"], list) or not value["keys"]:
+            raise ValueError("Local Platform identity has no valid public signing keys.")
+        result = {}
+        for key in value["keys"]:
+            if (not isinstance(key, dict) or set(key) != {"kty", "crv", "kid", "use", "alg", "x", "y"}
+                    or any(not isinstance(item, str) or not item for item in key.values())
+                    or key["kid"] in result or (key["kty"], key["crv"], key["alg"], key["use"]) != ("EC", "P-256", "ES256", "sig")):
+                raise ValueError("Local Platform identity has invalid or duplicate public signing keys.")
+            result[key["kid"]] = key
+        return result
+    public = roster(keys)
+    if public != roster(native):
+        raise ValueError("Local Platform identity and Native public signing keys differ.")
+    return {**identity, "issuer": env["EPOCH_TOKEN_ISSUER"], "native_jwks_match": True,
+            "key_count": len(public)}
+
+
 def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"Missing service environment file: {path}")
@@ -823,11 +914,11 @@ def local_ports(stack: Stack) -> list[int]:
 
 
 def service_ports(stack: Stack) -> list[int]:
-    """The profile's ports and the two behind the front door."""
-    ports = local_ports(stack) + [BACKEND_PORT, PLATFORM_PORT]
+    """The profile, behind-front-door services, and the internal identity role."""
+    ports = local_ports(stack) + [BACKEND_PORT, PLATFORM_PORT, IDENTITY_PORT]
     if len(set(ports)) != len(ports):
         raise ValueError(
-            f"Ports {BACKEND_PORT} and {PLATFORM_PORT} are reserved for Backend and Platform behind the front door."
+            f"Ports {BACKEND_PORT}, {PLATFORM_PORT} and {IDENTITY_PORT} are reserved for Native and Platform roles."
         )
     return ports
 
@@ -864,7 +955,8 @@ def prepare(
     binary, ai, ui = paths["backend_binary"], paths["ai_dir"], paths["ui_dir"]
     verify_local_agent_isolation(
         ai,
-        (stack.backend_url, f"http://127.0.0.1:{BACKEND_PORT}", f"http://127.0.0.1:{PLATFORM_PORT}"),
+        (stack.backend_url, f"http://127.0.0.1:{BACKEND_PORT}", f"http://127.0.0.1:{PLATFORM_PORT}",
+         f"http://127.0.0.1:{IDENTITY_PORT}"),
     )
     runtime_ai_source = retained_cut.runtime_sources["EpochAI"] if retained_cut else revisions["EpochAI"]["commit"]
     platform = paths["platform_dir"]
@@ -1019,6 +1111,15 @@ def prepare(
         Path(backend_env["EPOCH_PROJECT_DIR"]), revisions["EpochPlatform"]["commit"], state, reference_root,
         study_agent_origin=stack.ai_url,
     )
+    identity_service = prepare_platform_identity(
+        platform, node, base, backend_values, ai_values,
+        revisions["EpochPlatform"]["commit"], ai_runtime,
+    )
+    # A signing authority never reaches the agent's config/image, general or UI.
+    for key in IDENTITY_ONLY_SETTINGS:
+        ai_values.pop(key, None)
+    ai_values["EPOCH_TOKEN_ISSUER"] = identity_service[3]["EPOCH_TOKEN_ISSUER"]
+    common["EPOCH_PLATFORM_SERVICE_URL"] = f"http://127.0.0.1:{IDENTITY_PORT}"
     print(
         "Files and Space: Epoch Platform, on local disk in "
         f"{platform_service[3]['EPOCH_FILES_LOCAL_ROOT']}",
@@ -1100,6 +1201,7 @@ def prepare(
             f"http://127.0.0.1:{BACKEND_PORT}/api/v1/health",
         ),
         platform_service,
+        identity_service,
         (
             "FrontDoor",
             [sys.executable, str(FRONT_DOOR), str(ports[0]), str(BACKEND_PORT), str(PLATFORM_PORT)],
@@ -1138,7 +1240,9 @@ def prepare(
 
 
 def portal_environment(base: dict[str, str], stack: Stack) -> dict[str, str]:
-    public = {key: value for key, value in base.items() if key not in {STUDY_PEER_TOKEN, "EPOCH_RUN_STORE_URL"}}
+    public = {key: value for key, value in base.items() if key not in {
+        STUDY_PEER_TOKEN, "EPOCH_RUN_STORE_URL", TOKEN_SERVICE_CREDENTIAL, *IDENTITY_ONLY_SETTINGS,
+    }}
     return {**public, "VITE_API_BASE_URL": stack.backend_url,
             "VITE_LANGGRAPH_API_URL": stack.ai_url, "VITE_LANGGRAPH_ASSISTANT_ID": stack.assistant_id,
             "VITE_COGNITO_USER_POOL_ID": POOL, "VITE_COGNITO_USER_POOL_CLIENT_ID": CLIENT}
@@ -1308,6 +1412,7 @@ def main() -> None:
                 if args.login or not token_path().exists()
                 else cached_token(email=args.email)
             )
+            identity_readiness = None
             for name, command, cwd, env, url in services:
                 log = state / f"{name.lower()}.log"
                 with os.fdopen(
@@ -1328,7 +1433,11 @@ def main() -> None:
                 # The up server imports the graphs inside its container first.
                 up_agent = name == "AI" and args.ai_runtime == "up"
                 wait_ready(url, children, 420 if up_agent else 180)
+                if name == "PlatformIdentity":
+                    identity_readiness = verify_platform_identity((name, command, cwd, env, url))
             receipt = asyncio.run(wait_stack_ready(stack, "Bearer " + bearer, children))
+            if identity_readiness is not None:
+                receipt["platform_identity"] = identity_readiness
             if retained is not None:
                 actual_ai = receipt.get("ai")
                 if (not isinstance(actual_ai, dict) or not isinstance(actual_ai.get("deployment"), dict)

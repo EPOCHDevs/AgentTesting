@@ -94,6 +94,19 @@ Platform runs its general service in local mode (`EPOCH_FILES_LOCAL_ROOT`): no A
 account, with its objects and records in Backend's `personal_content` directory
 (`.artifacts/local-stack/backend/personal_content`), where the engine's local job
 store reads saved datasets, so a dataset saved locally is a local study input.
+The same Platform build also runs the separate identity role on port 9021. The
+agent's internal token calls use that role through `EPOCH_PLATFORM_SERVICE_URL`;
+public authentication and JWKS routes keep their existing Native/front-door path.
+Identity uses the existing `EPOCH_TOKEN_ISSUER`, `EPOCH_TOKEN_SIGNING_KEYS` and
+`EPOCH_TOKEN_SERVICE_TOKEN` from Backend's private environment. The agent must
+already have the same service credential. Signing keys never enter its generated
+configuration, general or the browser. Startup checks identity's role, revision
+and public keys against Native before starting the agent. `langgraph up` uses
+the normal `host.docker.internal` origin and matching service hostname.
+No cloud key/grant tables are inherited: session-backed local tokens work, while
+credentials requiring an unavailable API-key or sign-in grant store retain the
+identity service's explicit failure. The launcher does not create replacement
+keys, credentials, stores or authority.
 The front door also sends engine reference and discovery routes to Platform. Reference files come
 from the primary engine's `epoch_reference_files` exporter, not another environment. Build that
 target once alongside the server; the launcher exports a fresh immutable generation before startup
@@ -228,7 +241,8 @@ opening a Rates context can run its declared text model, and previously accepted
 context tasks can resume after a restart. Calendar V1 event rows remain read-only.
 
 The launcher asks for your Epoch email/password on first use, starts Backend →
-AI → UI, and checks authenticated readiness. Open `http://localhost:3000` and
+Platform general → Platform identity → front door → AI → UI, and checks
+authenticated readiness. Open `http://localhost:3000` and
 sign in with the same account. The CLI and browser maintain separate sessions.
 The local commentary deployment is identified by the verified AI commit, or by
 `EPOCH_COMMENTARY_DEPLOYMENT_REVISION` in the AI environment when explicitly set.
