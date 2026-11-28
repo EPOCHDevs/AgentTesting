@@ -740,6 +740,11 @@ def prepare_platform(
         "EPOCH_DEFINITIONS_LOCAL_ROOT": str(project / "definitions"),
         "EPOCH_MODEL_EXPORT_SERVER_URL": f"http://127.0.0.1:{BACKEND_PORT}",
         "EPOCH_REFERENCE_LOCAL_ROOT": str(reference_root),
+        # Research records live beside the engine's own native records, so Platform
+        # adopts any it wrote before the cutover. Research reads the engine's run records,
+        # links, answers, run folders and definitions under its project directory, read only.
+        "EPOCH_RESEARCH_LOCAL_ROOT": str(project / "sdk_requests"),
+        "EPOCH_RESEARCH_NATIVE_ROOT": str(project),
         **files_access,
     })
     if STUDY_PEER_TOKEN in files_access:
