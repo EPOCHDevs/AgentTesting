@@ -40,7 +40,7 @@ def preview(tmp_path, commit="a" * 40):
 def controller(tmp_path, *, failure=None):
     old = preview(tmp_path)
     new = preview(tmp_path, "b" * 40)
-    others, active, events = [Child(i) for i in range(100, 104)], Child(104), []
+    others, active, events = [Child(i) for i in range(100, 105)], Child(105), []
     children = [*others, active]
 
     def stage(commit, configuration):
@@ -435,7 +435,7 @@ ThreadingHTTPServer((a.host,a.port),functools.partial(SimpleHTTPRequestHandler,d
                           f'http://127.0.0.1:{port}',value.commit,value.configuration)
     old, new = real(original), real(preview(tmp_path,'b'*40))
     others = [subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True)
-              for _ in range(4)]
+              for _ in range(5)]
     children = list(others)
     value = None
     try:

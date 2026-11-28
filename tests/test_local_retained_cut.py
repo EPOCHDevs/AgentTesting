@@ -233,7 +233,7 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     state.mkdir()
     children, stopped, commands = [], [], []
     readiness = {"checked": False}
-    names = ["Backend", "Platform", "FrontDoor", "AI", "UI"]
+    names = ["Backend", "Platform", "PlatformIdentity", "FrontDoor", "AI", "UI"]
     services = [(name, [name], tmp_path, {}, "http://localhost:1") for name in names]
     monkeypatch.setattr(sys, "argv", ["local_stack", "--ai-runtime", "up", "--ui-runtime", "build",
                                      "--config", str(local_stack.PROJECT_ROOT / "AgentTesting/local-stack.toml"),
@@ -247,6 +247,7 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     monkeypatch.setattr(local_stack, "token_path", lambda: f.manifest)
     monkeypatch.setattr(local_stack, "cached_token", lambda **_: "fixture")
     monkeypatch.setattr(local_stack, "wait_ready", lambda *_: None)
+    monkeypatch.setattr(local_stack, "verify_platform_identity", lambda service: {"role": "identity", "native_jwks_match": True})
     async def health(*_args):
         readiness["checked"] = True
         return {"ai": {"deployment": {"git_sha": f.cut.runtime_sources["EpochAI"]},
@@ -268,7 +269,7 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     with pytest.raises(SystemExit) as exited:
         local_stack.main()
     assert exited.value.code == 1
-    assert stopped == children and len(stopped) == 5
+    assert stopped == children and len(stopped) == 6
     assert len(commands) == 1 and commands[0][:2] == ["docker", "compose"]
     assert not (state / refresh.CAPABILITY).exists()
     if failure_phase == "startup":
@@ -277,6 +278,7 @@ def test_retained_ui_failure_still_stops_all_owned_services(reviewed_cut, tmp_pa
     else:
         receipt = json.loads((state / "health.json").read_text())
         assert receipt["retained_runtime_cut"]["runtime_sources"] == f.cut.runtime_sources
+        assert receipt["platform_identity"] == {"role": "identity", "native_jwks_match": True}
 
 
 def test_preflight_failure_never_composes_down_an_existing_stack(tmp_path, monkeypatch):

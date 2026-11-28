@@ -190,11 +190,16 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     (backend / "services/stratifyx/.env.local").write_text(
         "EPOCH_ENVIRONMENT=prod\nEPOCH_SKIP_AUTH=1\nVENDOR_KEY=private\nEPOCH_GIT_SHA=stale-cloud-sha\n"
         "EPOCH_TOKEN_ISSUER=http://localhost:2024\n"
+        "EPOCH_TOKEN_SIGNING_KEYS=existing-native-signing-fixture\n"
+        "EPOCH_TOKEN_SERVICE_TOKEN=existing-service-credential\n"
     )
     (ai / ".env").write_text(
         "EPOCH_CAMPAIGN_SERVER=https://wrong.example\nMODEL_KEY=private\n"
         "EPOCH_FILES_WORKER_URL=https://services.dev.example\n"
         "LANGSMITH_LANGGRAPH_GIT_REF=dev\nLANGSMITH_LANGGRAPH_GIT_REF_SHA=stale-cloud-sha\n"
+        "EPOCH_TOKEN_SERVICE_TOKEN=existing-service-credential\n"
+        "EPOCH_TOKEN_SIGNING_KEYS=must-not-reach-agent\n"
+        "EPOCH_PLATFORM_SERVICE_URL=https://must-not-use-hosted.example\n"
         + (f'EPOCH_COMMENTARY_DEPLOYMENT_REVISION="{operator_revision}"\n'
            if operator_revision is not None else "")
     )
@@ -224,8 +229,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     state = local_stack.private_dir(tmp_path / "state")
     monkeypatch.setenv("AWS_PROFILE", "operator")
     services = local_stack.prepare(config, stack, state)
-    assert [service[0] for service in services] == ["Backend", "Platform", "FrontDoor", "AI", "UI"]
-    be, files, door, _agent, portal = services
+    assert [service[0] for service in services] == ["Backend", "Platform", "PlatformIdentity", "FrontDoor", "AI", "UI"]
+    be, files, identity, door, _agent, portal = services
     # The front door answers the profile's API origin, as the load balancer answers api.<env>.
     assert be[1][-1] == be[3]["PORT"] == str(local_stack.BACKEND_PORT)
     assert be[4] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}/api/v1/health"
@@ -257,6 +262,18 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert files[3]["EPOCH_ENVIRONMENT"] == "local" and files[3]["EPOCH_PLATFORM_ROLE"] == "general"
     assert files[3]["PORT"] == str(local_stack.PLATFORM_PORT)
     assert files[3]["EPOCH_PLATFORM_REVISION"] == "p" * 40
+    assert identity[1] == files[1] and identity[2] == files[2]
+    assert identity[3]["EPOCH_PLATFORM_ROLE"] == "identity"
+    assert identity[3]["PORT"] == str(local_stack.IDENTITY_PORT)
+    assert identity[3]["EPOCH_PLATFORM_SERVICE_HOST"] == "127.0.0.1"
+    assert identity[3]["EPOCH_TOKEN_ISSUER"] == be[3]["EPOCH_TOKEN_ISSUER"]
+    assert identity[3]["EPOCH_TOKEN_SIGNING_KEYS"] == be[3]["EPOCH_TOKEN_SIGNING_KEYS"]
+    assert identity[3]["EPOCH_TOKEN_SERVICE_TOKEN"] == _agent[3]["EPOCH_TOKEN_SERVICE_TOKEN"]
+    for service in (files, _agent, portal):
+        assert "EPOCH_TOKEN_SIGNING_KEYS" not in service[3]
+    for service in (files, portal):
+        assert "EPOCH_TOKEN_SERVICE_TOKEN" not in service[3]
+    assert _agent[3]["EPOCH_PLATFORM_SERVICE_URL"] == f"http://127.0.0.1:{local_stack.IDENTITY_PORT}"
     assert files[3]["EPOCH_STUDY_NATIVE_ORIGIN"] == f"http://127.0.0.1:{local_stack.BACKEND_PORT}"
     assert files[3]["EPOCH_STUDY_AGENT_ORIGIN"] == stack.ai_url
     assert files[3]["EPOCH_STUDY_NATIVE_PERSONAL_ROOT"] == files[3]["EPOCH_FILES_LOCAL_ROOT"] == str(
@@ -305,6 +322,8 @@ def test_configuration_keeps_all_services_local(tmp_path, monkeypatch, operator_
     assert generated["env"]["OPENAI_DIRECT_API_KEY"] == "private-direct-fixture"
     assert _agent[3]["OPENAI_DIRECT_API_KEY"] == "private-direct-fixture"
     assert generated["env"]["MODEL_KEY"] == "private"
+    assert generated["env"]["EPOCH_PLATFORM_SERVICE_URL"] == f"http://127.0.0.1:{local_stack.IDENTITY_PORT}"
+    assert "EPOCH_TOKEN_SIGNING_KEYS" not in generated["env"]
     assert "OPENAI_DIRECT_API_KEY" not in be[3]
     assert "OPENAI_DIRECT_API_KEY" not in portal[3]
     receipt = json.loads((state / "source-checkouts.json").read_text())
